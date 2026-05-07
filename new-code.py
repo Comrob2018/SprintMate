@@ -1,13 +1,12 @@
-def get_project_members(self, project_key: str):
-    encoded = urllib.parse.quote(project_key)
-    url = (f"{self.base_url}/rest/api/{self.api_version}/"
-           f"user/assignable/search?project={encoded}&maxResults=100")
-    req = urllib.request.Request(url, headers=self.headers)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read().decode())
-            return result if isinstance(result, list) else []
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
-    except Exception:
-        return []
+def set_members(self, members: list):
+    # Guard: ignore if this looks like transitions data not user data
+    if members and "to" in members[0]:
+        return
+    self._members = members
+    self.assignee_combo.clear()
+    self.assignee_combo.addItem("— Unassigned —", None)
+    for m in members:
+        # DC uses 'name' as the username key for assignee updates
+        uid = m.get("name") or m.get("key") or m.get("accountId")
+        display = m.get("displayName") or m.get("name") or "?"
+        self.assignee_combo.addItem(display, uid)
