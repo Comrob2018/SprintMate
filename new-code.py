@@ -1,25 +1,35 @@
-# After
-MODE_SENTINEL = "sentinel"
-MODE_ACYD     = "acyd"
+# Removed: Cloud/DC toggle
+self.cloud_btn = QPushButton("☁  Jira Cloud")
+self.dc_btn = QPushButton("🏢  Data Center / Server")
+self.cloud_btn.clicked.connect(lambda: self._set_mode("cloud"))
+self.dc_btn.clicked.connect(lambda: self._set_mode("datacenter"))
 
-def __init__(self, base_url, token, mode=MODE_SENTINEL, email=""):
-    self.api_version = "2"  # Both are Data Center
-    auth = f"Bearer {token}"
-    
-body = {"body": text}
+# Removed: email field
+self.email_lbl = QLabel("Email:")
+self.email_edit = QLineEdit(settings.get("email", ""))
+self.form.addRow(self.email_lbl, self.email_edit)
 
-# After
-fields["description"] = description
-fields["assignee"] = {"name": assignee_id}
+# Removed: single url/token stored flat
+self.url_edit = QLineEdit(settings.get("url", ""))
+self.token_edit = QLineEdit(settings.get("token", ""))
 
+# Added: Sentinel/ACYD toggle
+self.sentinel_btn = QPushButton("◈  SENTINEL")
+self.acyd_btn = QPushButton("◈  ACYD")
+self.sentinel_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SENTINEL))
+self.acyd_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_ACYD))
 
-# After
-self._client = JiraClient(url, token, mode)
-mode_label = "SENTINEL" if mode == JiraClient.MODE_SENTINEL else "ACYD"
-self.mode_indicator.setText(f"◈  {mode_label}")
+# Added: internal store for both instances
+self._data = {
+    JiraClient.MODE_SENTINEL: {
+        "url":   settings.get("sentinel_url", ""),
+        "token": settings.get("sentinel_token", ""),
+    },
+    JiraClient.MODE_ACYD: {
+        "url":   settings.get("acyd_url", ""),
+        "token": settings.get("acyd_token", ""),
+    },
+}
 
-self.mode_indicator = QLabel("")
-self.mode_indicator.setStyleSheet(
-    f"color: {ACCENT_BLUE}; font-size: 11px; letter-spacing: 2px; padding: 0 12px;"
-)
-tb_layout.addWidget(self.mode_indicator)
+# Added: OK button now calls _save_and_accept instead of accept
+btns.accepted.connect(self._save_and_accept)
