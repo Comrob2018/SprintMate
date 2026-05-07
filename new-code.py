@@ -1,2 +1,17 @@
-DEBUG member keys: ['id', 'name', 'description', 'opsbarSequence', 'to']
-DEBUG first member: {'id': '101', 'name': 'Rejected or OBE', 'description': '', 'opsbarSequence': 2147483647, 'to': {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/status/10000', 'description': '', 'iconUrl': 'https://jira.sde.sp.gc1.myngc.com/images/icons/status_generic.gif', 'name': 'Done', 'id': '10000', 'statusCategory': {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/statuscategory/3', 'id': 3, 'key': 'done', 'colorName': 'success', 'name': 'Done'}}}
+def get_project_members(self, project_key: str):
+    encoded = urllib.parse.quote(project_key)
+    url = (f"{self.base_url}/rest/api/{self.api_version}/"
+           f"user/assignable/search?project={encoded}&maxResults=100")
+    print(f"DEBUG get_project_members URL: {url}")
+    req = urllib.request.Request(url, headers=self.headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+            print(f"DEBUG get_project_members type={type(result).__name__} len={len(result) if isinstance(result, list) else 'n/a'}")
+            if result:
+                print(f"DEBUG first item keys: {list(result[0].keys()) if isinstance(result, list) else list(result.keys())}")
+            return result if isinstance(result, list) else []
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
+    except Exception:
+        return []
