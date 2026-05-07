@@ -9,7 +9,7 @@ A PyQt6 desktop app for managing your team's Jira stories by sprint — update a
 ### 1. Install dependencies
 
 ```bash
-pip install PyQt6
+pip install -r requirements.txt
 ```
 
 ### 2. Run the app
