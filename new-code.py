@@ -1,12 +1,50 @@
-def set_members(self, members: list):
-    # Guard: ignore if this looks like transitions data not user data
-    if members and "to" in members[0]:
-        return
-    self._members = members
-    self.assignee_combo.clear()
-    self.assignee_combo.addItem("— Unassigned —", None)
-    for m in members:
-        # DC uses 'name' as the username key for assignee updates
-        uid = m.get("name") or m.get("key") or m.get("accountId")
-        display = m.get("displayName") or m.get("name") or "?"
-        self.assignee_combo.addItem(display, uid)
+Four changes:
+1. Removed ASSIGNEE label and dropdown from filter bar:
+
+# Removed entirely
+fb_layout.addWidget(QLabel("ASSIGNEE"))
+self.assignee_filter = QComboBox()
+self.assignee_filter.setMinimumWidth(160)
+self.assignee_filter.setEnabled(False)
+self.assignee_filter.addItem("— All —", None)
+self.assignee_filter.currentIndexChanged.connect(...)
+fb_layout.addWidget(self.assignee_filter)
+
+
+2. Removed enable call in _on_issues_loaded:
+
+# Removed
+self.assignee_filter.setEnabled(True)
+
+
+3. Removed populate in _on_members_loaded:
+
+# Removed
+self.assignee_filter.blockSignals(True)
+self.assignee_filter.clear()
+self.assignee_filter.addItem("— All —", None)
+for m in members:
+    self.assignee_filter.addItem(...)
+self.assignee_filter.blockSignals(False)
+
+
+4. Simplified _filter_table back to text-only:
+
+# Before
+def _filter_table(self, text: str):
+    text = text.lower()
+    assignee_filter = self.assignee_filter.currentData()
+    for row in range(self.table.rowCount()):
+        text_match = any(...) if text else True
+        assignee_match = (assignee_filter is None or ...)
+        self.table.setRowHidden(row, not (text_match and assignee_match))
+
+# After
+def _filter_table(self, text: str):
+    text = text.lower()
+    for row in range(self.table.rowCount()):
+        match = any(
+            text in (self.table.item(row, col).text().lower() if self.table.item(row, col) else "")
+            for col in range(self.table.columnCount())
+        ) if text else True
+        self.table.setRowHidden(row, not match)
