@@ -109,3 +109,43 @@ self._sp_field = self._client.story_point_field
 self.feature_link_edit = QLineEdit()
 self.feature_link_edit.setPlaceholderText("Feature link URL or ID…")
 form.addRow("Feature Link:", self.feature_link_edit)
+
+
+1. NewStoryDialog — assignee combo:
+
+# Before
+self.assignee_combo.addItem(m.get("displayName", "?"), m.get("accountId"))
+
+# After
+uid = m.get("name") or m.get("accountId")
+self.assignee_combo.addItem(m.get("displayName", "?"), uid)
+
+
+2. set_members in StoryEditPanel:
+
+# Before
+for m in members:
+    self.assignee_combo.addItem(m.get("displayName", "?"), m.get("accountId"))
+
+# After
+for m in members:
+    uid = m.get("name") or m.get("accountId")
+    self.assignee_combo.addItem(m.get("displayName", "?"), uid)
+
+
+3. load_issue — matching current assignee:
+
+# Before
+aid = assignee.get("accountId")
+
+# After
+aid = assignee.get("name") or assignee.get("accountId")
+
+
+4. _on_save — saving assignee:
+
+# Before
+fields["assignee"] = {"accountId": aid} if aid else None
+
+# After
+fields["assignee"] = {"name": aid} if aid else None
