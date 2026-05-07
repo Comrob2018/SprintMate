@@ -1,7 +1,2 @@
-# After
-def _on_members_loaded(self, members: list):
-    # Debug: print first member to see actual field names
-    if members:
-        print("DEBUG member keys:", list(members[0].keys()))
-        print("DEBUG first member:", members[0])
-    self.edit_panel.set_members(members)
+DEBUG member keys: ['id', 'name', 'description', 'opsbarSequence', 'to']
+DEBUG first member: {'id': '101', 'name': 'Rejected or OBE', 'description': '', 'opsbarSequence': 2147483647, 'to': {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/status/10000', 'description': '', 'iconUrl': 'https://jira.sde.sp.gc1.myngc.com/images/icons/status_generic.gif', 'name': 'Done', 'id': '10000', 'statusCategory': {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/statuscategory/3', 'id': 3, 'key': 'done', 'colorName': 'success', 'name': 'Done'}}}
