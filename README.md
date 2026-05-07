@@ -1,4 +1,4 @@
-# Jira Team Manager
+# SprintMate
 
 A PyQt6 desktop app for managing your team's Jira stories by sprint — update assignees, story points, descriptions, and post comments, all from one panel.
 
@@ -14,8 +14,8 @@ pip install -r requirements.txt
 
 ### 2. Run the app
 
-```bash
-python jira_team_manager.py
+```terminal or commandline
+python sprintmate.py
 ```
 
 ---
