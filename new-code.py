@@ -1,24 +1,8 @@
-set_members in StoryEditPanel:
-
-# Before
-for m in members:
-    uid = m.get("name") or m.get("accountId")
-    self.assignee_combo.addItem(m.get("displayName", "?"), uid)
-
-# After
-for m in members:
-    uid = m.get("name") or m.get("key") or m.get("accountId")
-    display = m.get("displayName") or m.get("name") or "?"
-    self.assignee_combo.addItem(display, uid)
-
-
-load_issue — assignee matching:
-
-# Before
-aid = assignee.get("name") or assignee.get("accountId")
-
-# After
-aid = assignee.get("name") or assignee.get("key") or assignee.get("accountId")
-
-
-Removed all debug prints from get_project_members and _on_members_loaded.​​​​​​​​​​​​​​​​
+def _on_members_loaded(self, members: list):
+    self.edit_panel.set_members(members)
+    self.assignee_filter.blockSignals(True)
+    self.assignee_filter.clear()
+    self.assignee_filter.addItem("— All —", None)
+    for m in members:
+        self.assignee_filter.addItem(m.get("displayName", "?"), m.get("displayName", ""))
+    self.assignee_filter.blockSignals(False)
