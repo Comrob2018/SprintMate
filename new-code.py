@@ -1,50 +1,58 @@
-Four changes:
-1. Removed ASSIGNEE label and dropdown from filter bar:
-
-# Removed entirely
-fb_layout.addWidget(QLabel("ASSIGNEE"))
-self.assignee_filter = QComboBox()
-self.assignee_filter.setMinimumWidth(160)
-self.assignee_filter.setEnabled(False)
-self.assignee_filter.addItem("— All —", None)
-self.assignee_filter.currentIndexChanged.connect(...)
-fb_layout.addWidget(self.assignee_filter)
-
-
-2. Removed enable call in _on_issues_loaded:
-
-# Removed
-self.assignee_filter.setEnabled(True)
-
-
-3. Removed populate in _on_members_loaded:
-
-# Removed
-self.assignee_filter.blockSignals(True)
-self.assignee_filter.clear()
-self.assignee_filter.addItem("— All —", None)
-for m in members:
-    self.assignee_filter.addItem(...)
-self.assignee_filter.blockSignals(False)
-
-
-4. Simplified _filter_table back to text-only:
+Six changes:
+1. _data in SettingsDialog.__init__ — added default_project:
 
 # Before
-def _filter_table(self, text: str):
-    text = text.lower()
-    assignee_filter = self.assignee_filter.currentData()
-    for row in range(self.table.rowCount()):
-        text_match = any(...) if text else True
-        assignee_match = (assignee_filter is None or ...)
-        self.table.setRowHidden(row, not (text_match and assignee_match))
+JiraClient.MODE_SENTINEL: {
+    "url":   settings.get("sentinel_url", ""),
+    "token": settings.get("sentinel_token", ""),
+},
 
 # After
-def _filter_table(self, text: str):
-    text = text.lower()
-    for row in range(self.table.rowCount()):
-        match = any(
-            text in (self.table.item(row, col).text().lower() if self.table.item(row, col) else "")
-            for col in range(self.table.columnCount())
-        ) if text else True
-        self.table.setRowHidden(row, not match)
+JiraClient.MODE_SENTINEL: {
+    "url":             settings.get("sentinel_url", ""),
+    "token":           settings.get("sentinel_token", ""),
+    "default_project": settings.get("sentinel_default_project", ""),
+},
+
+
+(same for ACYD)
+2. Settings form — added Default Project field:
+
+# Added after PAT Token row
+self.default_project_edit = QLineEdit()
+self.default_project_edit.setPlaceholderText("e.g. MDT  (auto-selects on connect)")
+form.addRow("Default Project:", self.default_project_edit)
+
+
+3. _set_mode — saves/loads default_project when switching instances:
+
+# Added to save block
+self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
+
+# Added to load block
+self.default_project_edit.setText(self._data[mode]["default_project"])
+
+
+4. _save_and_accept — saves default_project before closing:
+
+# Added
+self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
+
+
+5. get_settings — returns default_project for both instances:
+
+# Added
+"sentinel_default_project": self._data[JiraClient.MODE_SENTINEL]["default_project"],
+"acyd_default_project":     self._data[JiraClient.MODE_ACYD]["default_project"],
+
+
+6. _on_projects_loaded in MainWindow — auto-selects default project:
+
+# Added after populating project combo
+mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+default_key = self._settings.get(f"{mode}_default_project", "")
+if default_key:
+    for i in range(self.project_combo.count()):
+        if self.project_combo.itemData(i) == default_key:
+            self.project_combo.setCurrentIndex(i)
+            break
