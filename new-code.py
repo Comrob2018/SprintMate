@@ -1,17 +1,9 @@
-def get_priorities(self):
-    url = f"{self.base_url}/rest/api/{self.api_version}/priority/search?maxResults=50"
+def get_projects(self):
+    url = f"{self.base_url}/rest/api/{self.api_version}/project?maxResults=100&orderBy=name"
     req = urllib.request.Request(url, headers=self.headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read().decode())
-            # v3 returns {values: [...]}, v2 returns a list directly
-            if isinstance(result, list):
-                return result
-            return result.get("values", [])
-    except Exception:
-        # Fall back to plain /priority for older DC versions
-        try:
-            result = self._request("GET", "priority")
-            return result if isinstance(result, list) else []
-        except Exception:
-            return []
+            return result if isinstance(result, list) else result.get("values", [])
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
