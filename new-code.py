@@ -1,58 +1,44 @@
 Six changes:
-1. _data in SettingsDialog.__init__ — added default_project:
+1. _data in SettingsDialog.__init__ — added default_board:
 
-# Before
-JiraClient.MODE_SENTINEL: {
-    "url":   settings.get("sentinel_url", ""),
-    "token": settings.get("sentinel_token", ""),
-},
-
-# After
-JiraClient.MODE_SENTINEL: {
-    "url":             settings.get("sentinel_url", ""),
-    "token":           settings.get("sentinel_token", ""),
-    "default_project": settings.get("sentinel_default_project", ""),
-},
+# Added to both Sentinel and ACYD
+"default_board": settings.get("sentinel_default_board", ""),
+"default_board": settings.get("acyd_default_board", ""),
 
 
-(same for ACYD)
-2. Settings form — added Default Project field:
+2. Settings form — added Default Board field:
 
-# Added after PAT Token row
-self.default_project_edit = QLineEdit()
-self.default_project_edit.setPlaceholderText("e.g. MDT  (auto-selects on connect)")
-form.addRow("Default Project:", self.default_project_edit)
+self.default_board_edit = QLineEdit()
+self.default_board_edit.setPlaceholderText("e.g. MDT board  (auto-selects on connect)")
+form.addRow("Default Board:", self.default_board_edit)
 
 
-3. _set_mode — saves/loads default_project when switching instances:
-
-# Added to save block
-self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
-
-# Added to load block
-self.default_project_edit.setText(self._data[mode]["default_project"])
-
-
-4. _save_and_accept — saves default_project before closing:
+3. _set_mode — saves default_board when switching instances:
 
 # Added
-self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
+self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
 
 
-5. get_settings — returns default_project for both instances:
+4. _set_mode — loads default_board when switching instances:
 
 # Added
-"sentinel_default_project": self._data[JiraClient.MODE_SENTINEL]["default_project"],
-"acyd_default_project":     self._data[JiraClient.MODE_ACYD]["default_project"],
+self.default_board_edit.setText(self._data[mode].get("default_board", ""))
 
 
-6. _on_projects_loaded in MainWindow — auto-selects default project:
+5. get_settings — returns default_board for both instances:
 
-# Added after populating project combo
+# Added
+"sentinel_default_board": self._data[JiraClient.MODE_SENTINEL].get("default_board", ""),
+"acyd_default_board":     self._data[JiraClient.MODE_ACYD].get("default_board", ""),
+
+
+6. _on_boards_loaded in MainWindow — auto-selects default board:
+
+# Added after populating board combo
 mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
-default_key = self._settings.get(f"{mode}_default_project", "")
-if default_key:
-    for i in range(self.project_combo.count()):
-        if self.project_combo.itemData(i) == default_key:
-            self.project_combo.setCurrentIndex(i)
+default_board = self._settings.get(f"{mode}_default_board", "").lower()
+if default_board:
+    for i in range(self.board_combo.count()):
+        if default_board in self.board_combo.itemText(i).lower():
+            self.board_combo.setCurrentIndex(i)
             break
