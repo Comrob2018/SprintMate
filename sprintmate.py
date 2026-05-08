@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QFrame, QScrollArea, QDialog, QDialogButtonBox, QMessageBox,
     QGroupBox, QFormLayout,
     QAbstractItemView, QProgressBar, QStatusBar,
-    QTabWidget, QDateEdit
+    QTabWidget, QDateEdit, QFileDialog
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QDate
@@ -321,20 +321,31 @@ QTabBar::tab:hover:!selected {{
 # ── Jira API client ───────────────────────────────────────────────────────────
 class JiraClient:
     """Supports both Jira Cloud (Basic auth, API v3) and Data Center/Server (Bearer PAT, API v2)."""
+    MODE_DC = "sentinel"
+    MODE_CLOUD = "sentinel"
+    MODE_SENTINEL = "Sentinel"
+    MODE_ACYD     = "ACyD"
 
-    MODE_CLOUD  = "cloud"
-    MODE_DC     = "datacenter"
+    # mappings
+    _FIELD_MAP = {
+        MODE_ACYD : {
+            "story_point": "customfield_10006",
+            "feature_link": "customfield_10000"
+        },
+        MODE_SENTINEL : {
+            "story_point": "customfield_10106",
+            "feature_link": "customfield_10100"
+        },
+    }
 
-    def __init__(self, base_url: str, token: str, mode: str = MODE_DC, email: str = ""):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url, token, mode=MODE_SENTINEL, email=""):
+        self.api_version = "2"  # Both are Data Center
         self.mode = mode
-        # API version differs between Cloud and Data Center
-        self.api_version = "3" if mode == self.MODE_CLOUD else "2"
-        if mode == self.MODE_CLOUD:
-            b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
-            auth = f"Basic {b64}"
-        else:
-            auth = f"Bearer {token}"
+        self.base_url = base_url.rstrip("/")
+        fields = self._FIELD_MAP.get(mode)
+        self.story_point_field_id = fields.get("story_point")
+        self.feature_link_field_id = fields.get("feature_link")
+        auth = f"Bearer {token}"
         self.headers = {
             "Authorization": auth,
             "Content-Type": "application/json",
@@ -351,11 +362,17 @@ class JiraClient:
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             msg = e.read().decode()
-            raise RuntimeError(f"HTTP {e.code}: {msg}")
+            raise RuntimeError(f"HTTP {e.code}: [{method} {url}] {msg}")
 
     def get_projects(self):
-        result = self._request("GET", "project/search?maxResults=100&orderBy=name")
-        return result.get("values", [])
+        url = f"{self.base_url}/rest/api/{self.api_version}/project?maxResults=100&orderBy=name"
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode())
+                return result if isinstance(result, list) else result.get("values", [])
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
 
     def get_boards(self, project_key: str):
         url = f"{self.base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}"
@@ -370,9 +387,11 @@ class JiraClient:
             return json.loads(resp.read().decode()).get("values", [])
 
     def get_sprint_issues(self, board_id: int, sprint_id: int):
+        sp = self.story_point_field_id
+        fl = self.feature_link_field_id
         fields = ",".join([
             "summary", "assignee", "status", "priority", "description",
-            "comment", "issuetype", "customfield_10016", "duedate",
+            "comment", "issuetype", sp, fl, "duedate",
             "sprint", "closedSprints", "customfield_10020"
         ])
         url = (f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint/{sprint_id}"
@@ -380,7 +399,18 @@ class JiraClient:
         req = urllib.request.Request(url, headers=self.headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode()).get("issues", [])
-
+        
+    def search_issues_jql(self, jql: str, fields: str = "summary,assignee,status"):
+        encoded = urllib.parse.quote(jql)
+        url = (f"{self.base_url}/rest/api/{self.api_version}/"
+            f"search?jql={encoded}&maxResults=50&fields={fields}")
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode()).get("issues", [])
+        except Exception:
+            return []
+        
     def get_issue_transitions(self, issue_key: str):
         return self._request("GET", f"issue/{issue_key}/transitions").get("transitions", [])
 
@@ -392,8 +422,22 @@ class JiraClient:
         return result.get("issueTypes", [])
 
     def get_priorities(self):
-        result = self._request("GET", "priority")
-        return result if isinstance(result, list) else []
+        url = f"{self.base_url}/rest/api/{self.api_version}/priority/search?maxResults=50"
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode())
+                # v3 returns {values: [...]}, v2 returns a list directly
+                if isinstance(result, list):
+                    return result
+                return result.get("values", [])
+        except Exception:
+            # Fall back to plain /priority for older DC versions
+            try:
+                result = self._request("GET", "priority")
+                return result if isinstance(result, list) else []
+            except Exception:
+                return []
 
     def move_to_sprint(self, issue_key: str, sprint_id: int):
         url = f"{self.base_url}/rest/agile/1.0/sprint/{sprint_id}/issue"
@@ -406,60 +450,71 @@ class JiraClient:
                 raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
     def get_project_members(self, project_key: str):
+        encoded = urllib.parse.quote(project_key)
+        url = (f"{self.base_url}/rest/api/{self.api_version}/"
+            f"user/assignable/search?project={encoded}&maxResults=100")
+        req = urllib.request.Request(url, headers=self.headers)
         try:
-            result = self._request("GET", f"user/assignable/search?project={project_key}&maxResults=100")
-            return result if isinstance(result, list) else []
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode())
+                return result if isinstance(result, list) else []
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
         except Exception:
             return []
-
+        
     def update_issue(self, issue_key: str, fields: dict):
         self._request("PUT", f"issue/{issue_key}", {"fields": fields})
 
     def add_comment(self, issue_key: str, text: str):
-        if self.mode == self.MODE_CLOUD:
-            # Cloud API v3 requires ADF body
-            body = {"body": {"type": "doc", "version": 1,
-                             "content": [{"type": "paragraph",
-                                          "content": [{"type": "text", "text": text}]}]}}
-        else:
-            # Data Center API v2 uses plain string
-            body = {"body": text}
+        body = {"body": text}
         self._request("POST", f"issue/{issue_key}/comment", body)
 
     def test_connection(self):
         return self._request("GET", "myself")
 
-    def create_issue(self, project_key: str, summary: str, issue_type: str,
-                     description: str = "", assignee_id: str = None,
-                     priority: str = None, story_points: float = None,
-                     sprint_id: int = None, due_date: str = None):
+    def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        description: str,
+        issuetype_id: str,
+        story_points: int | None = None,
+        feature_link: str | None = None,
+        priority: str | None = None,
+        due_date: str | None = None,
+    ) -> dict:
+        """
+        Build the payload and POST a new issue, using the dynamic field IDs
+        from the field‑map instead of hard‑coded ones.
+        """
         fields = {
             "project": {"key": project_key},
             "summary": summary,
-            "issuetype": {"name": issue_type},
+            "description": description,
+            "issuetype": {"id": issuetype_id},
         }
-        if description:
-            if self.mode == self.MODE_CLOUD:
-                fields["description"] = {
-                    "type": "doc", "version": 1,
-                    "content": [{"type": "paragraph",
-                                 "content": [{"type": "text", "text": description}]}]
-                }
-            else:
-                fields["description"] = description
-        if assignee_id:
-            fields["assignee"] = {"accountId": assignee_id} if self.mode == self.MODE_CLOUD                                   else {"name": assignee_id}
+
+        # ---- Priority -------------------------------------------------
         if priority:
             fields["priority"] = {"name": priority}
+
+        # ---- Story points (dynamic) ----------------------------------
         if story_points is not None:
-            fields["customfield_10016"] = story_points
+            # In the original code the field was hard‑coded as customfield_10016
+            # (see source) [1].  Now we use the mapped ID.
+            fields[self.story_point_field_id] = story_points
+
+        # ---- Feature link (dynamic) -----------------------------------
+        if feature_link is not None:
+            fields[self.feature_link_field_id] = feature_link
+
+        # ---- Due date -------------------------------------------------
         if due_date:
             fields["duedate"] = due_date
-        result = self._request("POST", "issue", {"fields": fields})
-        # Move to sprint if specified
-        if sprint_id and result.get("key"):
-            self.move_to_sprint(result["key"], sprint_id)
-        return result
+
+        # POST the request (your existing helper)
+        return self._request("POST", "issue", {"fields": fields})
 
     # ── User management ───────────────────────────────────────────────────────
     def get_project_roles(self, project_key: str):
@@ -485,8 +540,11 @@ class JiraClient:
 
     def search_users(self, query: str):
         encoded = urllib.parse.quote(query)
-        result = self._request("GET", f"user/search?query={encoded}&maxResults=20")
-        return result if isinstance(result, list) else []
+        url = f"{self.base_url}/rest/api/{self.api_version}/user/search?query={encoded}&maxResults=20"
+        req = urllib.request.Request(url, headers=self.headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+            return result if isinstance(result, list) else []
 
     def invite_user(self, email: str, project_key: str, role_id: int):
         """Cloud only – create new user invite via Atlassian API."""
@@ -558,7 +616,8 @@ class NewStoryDialog(QDialog):
         self.assignee_combo = QComboBox()
         self.assignee_combo.addItem("— Unassigned —", None)
         for m in members:
-            self.assignee_combo.addItem(m.get("displayName", "?"), m.get("accountId"))
+            uid = m.get("name") or m.get("accountId")
+            self.assignee_combo.addItem(m.get("displayName", "?"), uid)
         form.addRow("Assignee:", self.assignee_combo)
 
         # Sprint
@@ -632,6 +691,93 @@ class NewStoryDialog(QDialog):
         }
 
 
+# ------------------IMPORT DIALOG CLASS------------------------------
+class ImportCommentsDialog(QDialog):
+    def __init__(self, parsed: dict, loaded_keys: set, cross_keys=None, cross_posts=None, parent=None):
+        """
+        parsed      : {issue_key: comment_text} from the file
+        loaded_keys : set of issue keys currently in the story table
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Import Comments — Preview")
+        self.setMinimumWidth(620)
+        self.setMinimumHeight(440)
+        self.setStyleSheet(parent.styleSheet() if parent else "")
+
+        self._parsed = parsed
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        title = QLabel("◈  IMPORT COMMENTS PREVIEW")
+        title.setObjectName("heading")
+        layout.addWidget(title)
+
+        matched   = {k: v for k, v in parsed.items() if k in loaded_keys}
+        unmatched = {k: v for k, v in parsed.items() if k not in loaded_keys}
+
+        summary = QLabel(
+            f"Found {len(parsed)} entries — "
+            f"{len(matched)} matched to loaded stories, "
+            f"{len(unmatched)} not found in current sprint."
+        )
+        summary.setObjectName("dim")
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["KEY", "COMMENT", "STATUS"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setShowGrid(False)
+
+        for key, comment in parsed.items():
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            key_item = QTableWidgetItem(key)
+            key_item.setForeground(QColor(ACCENT_CYAN))
+            self.table.setItem(row, 0, key_item)
+            self.table.setItem(row, 1, QTableWidgetItem(comment[:120] + ("…" if len(comment) > 120 else "")))
+            if key in loaded_keys:
+                status_item = QTableWidgetItem("✓ Will post")
+                status_item.setForeground(QColor(ACCENT_GREEN))
+            else:
+                status_item = QTableWidgetItem("✗ Not in sprint")
+                status_item.setForeground(QColor(ACCENT_ORG))
+            self.table.setItem(row, 2, status_item)
+            self.table.setRowHeight(row, 36)
+
+        layout.addWidget(self.table, 1)
+
+        if unmatched:
+            warn = QLabel(f"⚠  {len(unmatched)} keys not found will be skipped.")
+            warn.setStyleSheet(f"color: {ACCENT_ORG}; font-size: 11px;")
+            layout.addWidget(warn)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText(
+            f"▶  Post {len(matched)} Comment{'s' if len(matched) != 1 else ''}"
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setEnabled(len(matched) > 0)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self._to_post = matched
+
+    def get_cross_posts(self) -> dict:
+        return {k: v for k, v in self._cross_posts.items() if k in self._to_post}
+    
+    def get_comments(self) -> dict:
+        return self._to_post
+    
 # ── Worker threads ────────────────────────────────────────────────────────────
 class Worker(QThread):
     result = pyqtSignal(object)
@@ -652,8 +798,8 @@ class Worker(QThread):
 class SettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Jira Connection Settings")
-        self.setMinimumWidth(500)
+        self.setWindowTitle("SprintMate — Connection Settings")
+        self.setMinimumWidth(520)
         self.setStyleSheet(STYLESHEET)
 
         layout = QVBoxLayout(self)
@@ -664,103 +810,117 @@ class SettingsDialog(QDialog):
         title.setObjectName("heading")
         layout.addWidget(title)
 
-        # Mode toggle
+        hint = QLabel("Configure each instance separately. Use the toggle to switch between them.")
+        hint.setObjectName("dim")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        # Instance toggle
         mode_layout = QHBoxLayout()
         mode_layout.setSpacing(0)
-        mode_lbl = QLabel("Mode: ")
-        mode_lbl.setObjectName("dim")
-        mode_layout.addWidget(mode_lbl)
 
-        self.cloud_btn = QPushButton("☁  Jira Cloud")
-        self.cloud_btn.setCheckable(True)
-        self.cloud_btn.setFixedHeight(32)
-
-        self.dc_btn = QPushButton("🏢  Data Center / Server")
-        self.dc_btn.setCheckable(True)
-        self.dc_btn.setFixedHeight(32)
-
-        # Style the toggle group
         toggle_style = f"""
-            QPushButton {{ border: 1px solid {BORDER}; border-radius: 0; padding: 4px 14px; }}
-            QPushButton:checked {{ background-color: {ACCENT_BLUE}; color: #fff; border-color: {ACCENT_BLUE}; }}
+            QPushButton {{ border: 1px solid {BORDER}; border-radius: 0; padding: 6px 24px; font-size: 12px; }}
+            QPushButton:checked {{ background-color: {ACCENT_BLUE}; color: #fff; border-color: {ACCENT_BLUE}; font-weight: bold; }}
             QPushButton:first-child {{ border-radius: 6px 0 0 6px; }}
             QPushButton:last-child  {{ border-radius: 0 6px 6px 0; }}
         """
-        self.cloud_btn.setStyleSheet(toggle_style)
-        self.dc_btn.setStyleSheet(toggle_style)
-        self.cloud_btn.clicked.connect(lambda: self._set_mode("cloud"))
-        self.dc_btn.clicked.connect(lambda: self._set_mode("datacenter"))
+        self.sentinel_btn = QPushButton("◈  SENTINEL")
+        self.sentinel_btn.setCheckable(True)
+        self.sentinel_btn.setFixedHeight(34)
+        self.sentinel_btn.setStyleSheet(toggle_style)
 
-        mode_layout.addWidget(self.cloud_btn)
-        mode_layout.addWidget(self.dc_btn)
+        self.acyd_btn = QPushButton("◈  ACYD")
+        self.acyd_btn.setCheckable(True)
+        self.acyd_btn.setFixedHeight(34)
+        self.acyd_btn.setStyleSheet(toggle_style)
+
+        self.sentinel_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SENTINEL))
+        self.acyd_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_ACYD))
+
+        mode_layout.addWidget(self.sentinel_btn)
+        mode_layout.addWidget(self.acyd_btn)
         mode_layout.addStretch()
         layout.addLayout(mode_layout)
 
-        # Form
-        self.form = QFormLayout()
-        self.form.setSpacing(10)
-        self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        # Per-instance form
+        self.instance_lbl = QLabel("")
+        self.instance_lbl.setObjectName("subheading")
+        layout.addWidget(self.instance_lbl)
 
-        self.url_edit = QLineEdit(settings.get("url", ""))
-        self.form.addRow("Jira URL:", self.url_edit)
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Cloud-only: email row
-        self.email_lbl = QLabel("Email:")
-        self.email_edit = QLineEdit(settings.get("email", ""))
-        self.email_edit.setPlaceholderText("you@company.com")
-        self.form.addRow(self.email_lbl, self.email_edit)
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://jira.yourcompany.com")
+        form.addRow("Jira URL:", self.url_edit)
 
-        # Token row (label changes per mode)
-        self.token_lbl = QLabel("Token:")
-        self.token_edit = QLineEdit(settings.get("token", ""))
+        self.token_edit = QLineEdit()
+        self.token_edit.setPlaceholderText("Personal Access Token")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.form.addRow(self.token_lbl, self.token_edit)
+        form.addRow("PAT Token:", self.token_edit)
+        self.default_project_edit = QLineEdit()
+        self.default_project_edit.setPlaceholderText("e.g. MDT  (auto-selects on connect)")
+        form.addRow("Default Project:", self.default_project_edit)
+        self.default_board_edit = QLineEdit()
+        self.default_board_edit.setPlaceholderText("e.g. MDT board  (auto-selects on connect)")
+        form.addRow("Default Board:", self.default_board_edit)
+        layout.addLayout(form)
 
-        layout.addLayout(self.form)
-
-        self.hint_lbl = QLabel("")
-        self.hint_lbl.setObjectName("dim")
-        self.hint_lbl.setWordWrap(True)
-        layout.addWidget(self.hint_lbl)
-
+        conn_row = QHBoxLayout()
         self.test_btn = QPushButton("Test Connection")
         self.test_btn.clicked.connect(self._test)
-        layout.addWidget(self.test_btn)
-
+        conn_row.addWidget(self.test_btn)
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("dim")
-        layout.addWidget(self.status_lbl)
+        conn_row.addWidget(self.status_lbl, 1)
+        layout.addLayout(conn_row)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        btns.accepted.connect(self.accept)
+        btns.accepted.connect(self._save_and_accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-        # Apply saved mode (default to datacenter)
-        self._set_mode(settings.get("mode", JiraClient.MODE_DC))
+        # Internal store for both instances
+        self._data = {
+            JiraClient.MODE_SENTINEL: {
+                "url":   settings.get("sentinel_url", "https://jira.sde.sp.gc1.myngc.com/"),
+                "token": settings.get("sentinel_token", ""),
+                "default_project": settings.get("sentinel_default_project", ""),
+                "default_board": settings.get("sentinel_default_board", ""),
+            },
+            JiraClient.MODE_ACYD: {
+                "url":   settings.get("acyd_url", "https://jira.northgrum.com/"),
+                "token": settings.get("acyd_token", ""),
+                "default_project": settings.get("acyd_default_project", ""),
+                "default_board": settings.get("acyd_default_board", ""),
+            },
+        }
+        self._set_mode(settings.get("mode", JiraClient.MODE_SENTINEL))
 
     def _set_mode(self, mode: str):
+        # Save current fields before switching
+        if hasattr(self, "_mode"):
+            self._data[self._mode]["url"]   = self.url_edit.text().strip()
+            self._data[self._mode]["token"] = self.token_edit.text().strip()
+            self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
+            self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
+
         self._mode = mode
-        is_cloud = mode == JiraClient.MODE_CLOUD
-        self.cloud_btn.setChecked(is_cloud)
-        self.dc_btn.setChecked(not is_cloud)
+        is_sentinel = mode == JiraClient.MODE_SENTINEL
+        self.sentinel_btn.setChecked(is_sentinel)
+        self.acyd_btn.setChecked(not is_sentinel)
+        self.instance_lbl.setText(f"{'SENTINEL' if is_sentinel else 'ACYD'} INSTANCE")
 
-        # Show/hide email row
-        self.email_lbl.setVisible(is_cloud)
-        self.email_edit.setVisible(is_cloud)
-
-        if is_cloud:
-            self.url_edit.setPlaceholderText("https://yourteam.atlassian.net")
-            self.token_lbl.setText("API Token:")
-            self.token_edit.setPlaceholderText("Token from id.atlassian.com → Security → API tokens")
-            self.hint_lbl.setText("☁  Cloud: uses email + API token (Basic auth, REST API v3)")
-        else:
-            self.url_edit.setPlaceholderText("https://jira.yourcompany.com")
-            self.token_lbl.setText("Personal Access Token:")
-            self.token_edit.setPlaceholderText("Token from Profile → Personal Access Tokens")
-            self.hint_lbl.setText("🏢  Data Center/Server: uses Bearer PAT (REST API v2) — no email needed")
+        # Load saved values for this instance
+        self.url_edit.setText(self._data[mode]["url"])
+        self.token_edit.setText(self._data[mode]["token"])
+        self.default_project_edit.setText(self._data[mode]["default_project"])
+        self.default_board_edit.setText(self._data[mode].get("default_board", ""))
+        self.status_lbl.setText("")
 
     def _test(self):
         self.status_lbl.setText("Testing…")
@@ -776,12 +936,27 @@ class SettingsDialog(QDialog):
             self.status_lbl.setText(f"✗ {str(e)[:100]}")
             self.status_lbl.setStyleSheet(f"color: {ACCENT_ORG};")
 
+    def _save_and_accept(self):
+        self._data[self._mode]["url"]   = self.url_edit.text().strip()
+        self._data[self._mode]["token"] = self.token_edit.text().strip()
+        self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
+        self._data[self._mode]["default_board"] = self.default_project_edit.text().strip().upper()
+        self.accept()
+
     def get_settings(self):
         return {
-            "url":   self.url_edit.text().strip(),
-            "email": self.email_edit.text().strip(),
-            "token": self.token_edit.text().strip(),
-            "mode":  self._mode,
+            "mode":           self._mode,
+            "sentinel_url":   self._data[JiraClient.MODE_SENTINEL]["url"],
+            "sentinel_token": self._data[JiraClient.MODE_SENTINEL]["token"],
+            "acyd_url":       self._data[JiraClient.MODE_ACYD]["url"],
+            "acyd_token":     self._data[JiraClient.MODE_ACYD]["token"],
+            # Active instance shortcuts
+            "url":   self._data[self._mode]["url"],
+            "token": self._data[self._mode]["token"],
+            "sentinel_default_project": self._data[JiraClient.MODE_SENTINEL]["default_project"],
+            "acyd_default_project":     self._data[JiraClient.MODE_ACYD]["default_project"],
+            "sentinel_default_board": self._data[JiraClient.MODE_SENTINEL].get("default_board", ""),
+            "acyd_default_board":     self._data[JiraClient.MODE_ACYD].get("default_board", ""),
         }
 
 
@@ -831,6 +1006,10 @@ class StoryEditPanel(QFrame):
         self.assignee_combo = QComboBox()
         self.assignee_combo.setMinimumWidth(200)
         form.addRow("Assignee:", self.assignee_combo)
+        
+        self.feature_link_edit = QLineEdit()
+        self.feature_link_edit.setPlaceholderText("Feature link URL or ID…")
+        form.addRow("Feature Link:", self.feature_link_edit)
 
         # Issue type
         self.issuetype_combo = QComboBox()
@@ -852,7 +1031,7 @@ class StoryEditPanel(QFrame):
         form.addRow("Priority:", self.priority_combo)
 
         # Fibonacci story points
-        FIBONACCI = [None, 0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+        FIBONACCI = [None, 0, 1, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
         self.points_combo.setMinimumWidth(140)
         self.points_combo.addItem("— Not set —", None)
@@ -925,12 +1104,19 @@ class StoryEditPanel(QFrame):
         self.due_date.setStyleSheet(f"color: {TEXT_DIM};")
         self.due_date.setDate(QDate.currentDate())
 
+
     def set_members(self, members: list):
+        # Guard: ignore if this looks like transitions data not user data
+        if members and "to" in members[0]:
+            return
         self._members = members
         self.assignee_combo.clear()
         self.assignee_combo.addItem("— Unassigned —", None)
         for m in members:
-            self.assignee_combo.addItem(m.get("displayName", "?"), m.get("accountId"))
+            # DC uses 'name' as the username key for assignee updates
+            uid = m.get("name") or m.get("key") or m.get("accountId")
+            display = m.get("displayName") or m.get("name") or "?"
+            self.assignee_combo.addItem(display, uid)
 
     def set_issue_types(self, issue_types: list):
         self.issuetype_combo.clear()
@@ -966,7 +1152,7 @@ class StoryEditPanel(QFrame):
         assignee = fields.get("assignee")
         self.assignee_combo.setCurrentIndex(0)
         if assignee:
-            aid = assignee.get("accountId")
+            aid = assignee.get("name") or assignee.get("key") or assignee.get("accountId")
             for i in range(self.assignee_combo.count()):
                 if self.assignee_combo.itemData(i) == aid:
                     self.assignee_combo.setCurrentIndex(i)
@@ -991,7 +1177,7 @@ class StoryEditPanel(QFrame):
                 break
 
         # Story points
-        pts = fields.get("customfield_10016") or fields.get("story_points")
+        pts = fields.get(getattr(self, "_sp_field", "customfield_10016")) or fields.get("customfield_10016") or fields.get("story_points")
         self.points_combo.setCurrentIndex(0)
         if pts is not None:
             pts_int = int(pts)
@@ -999,6 +1185,13 @@ class StoryEditPanel(QFrame):
                 if self.points_combo.itemData(i) == pts_int:
                     self.points_combo.setCurrentIndex(i)
                     break
+
+        fl_field = getattr(self, "_fl_field", "customfield_10100")
+        fl_value = fields.get(fl_field) or ""
+        if isinstance(fl_value, dict):
+            fl_value = fl_value.get("url", "") or fl_value.get("id", "")
+        self.feature_link_edit.setText(str(fl_value) if fl_value else "")
+
 
         # Sprint — find current sprint from customfield_10020
         sprint_field = fields.get("customfield_10020") or []
@@ -1051,7 +1244,7 @@ class StoryEditPanel(QFrame):
 
         # Assignee
         aid = self.assignee_combo.currentData()
-        fields["assignee"] = {"accountId": aid} if aid else None
+        fields["assignee"] = {"name": aid} if aid else None
 
         # Issue type
         itype_id = self.issuetype_combo.currentData()
@@ -1066,7 +1259,12 @@ class StoryEditPanel(QFrame):
         # Story points
         pts = self.points_combo.currentData()
         if pts is not None:
-            fields["customfield_10016"] = pts
+            fields[getattr(self, "_sp_field", "customfield_10016")] = pts
+        
+        fl_field = getattr(self, "_fl_field", "customfield_10100")
+        fl_val = self.feature_link_edit.text().strip()
+        if fl_val:
+            fields[fl_field] = fl_val
 
         # Due date
         if self._due_set:
@@ -1130,6 +1328,12 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet(f"font-size: 14px; color: {ACCENT_CYAN}; letter-spacing: 3px;")
         tb_layout.addWidget(logo)
         tb_layout.addStretch()
+        
+        self.mode_indicator = QLabel("")
+        self.mode_indicator.setStyleSheet(
+            f"color: {ACCENT_BLUE}; font-size: 11px; letter-spacing: 2px; padding: 0 12px;"
+        )
+        tb_layout.addWidget(self.mode_indicator)
 
         self.connect_btn = QPushButton("⚙  Configure")
         self.connect_btn.setObjectName("toolbar_btn")
@@ -1206,6 +1410,11 @@ class MainWindow(QMainWindow):
         self.new_story_btn.setEnabled(False)
         fb_layout.addWidget(self.new_story_btn)
 
+        self.import_btn = QPushButton("📄  Import Comments")
+        self.import_btn.setObjectName("toolbar_btn")
+        self.import_btn.clicked.connect(self._import_comments)
+        self.import_btn.setEnabled(False)
+        fb_layout.addWidget(self.import_btn)
         fb_layout.addStretch()
 
         self.search_edit = QLineEdit()
@@ -1277,12 +1486,17 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self._settings, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._settings = dlg.get_settings()
+            mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
             self._client = JiraClient(
                 self._settings["url"],
                 self._settings["token"],
-                self._settings.get("mode", JiraClient.MODE_DC),
-                self._settings.get("email", ""),
+                mode
             )
+            mode_label = "SENTINEL" if mode == JiraClient.MODE_SENTINEL else "ACYD"
+            self.edit_panel._sp_field = self._client.story_point_field_id
+            self.edit_panel._fl_field = self._client.feature_link_field_id
+            self._sp_field = self._client.story_point_field_id
+            self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
             self._load_projects()
 
@@ -1321,6 +1535,13 @@ class MainWindow(QMainWindow):
         self.project_combo.clear()
         for p in projects:
             self.project_combo.addItem(f"{p['key']} — {p['name']}", p["key"])
+        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+        default_key = self._settings.get(f"{mode}_default_project", "")
+        if default_key:
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == default_key:
+                    self.project_combo.setCurrentIndex(i)
+                    break
         self.project_combo.blockSignals(False)
         # Enable all controls now that we have a valid connection
         self.project_combo.setEnabled(True)
@@ -1328,7 +1549,7 @@ class MainWindow(QMainWindow):
         self.sprint_combo.setEnabled(True)
         self.load_btn.setEnabled(True)
         self._status(f"Loaded {len(projects)} projects.")
-        if projects:
+        if projects and default_key:
             self._on_project_changed()
 
     def _on_project_changed(self):
@@ -1358,6 +1579,13 @@ class MainWindow(QMainWindow):
         self.board_combo.clear()
         for b in boards:
             self.board_combo.addItem(b["name"], b["id"])
+        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+        default_board = self._settings.get(f"{mode}_default_board", "").lower()
+        if default_board:
+            for i in range(self.board_combo.count()):
+                if default_board in self.board_combo.itemText(i).lower():
+                    self.board_combo.setCurrentIndex(i)
+                    break
         self.board_combo.blockSignals(False)
         self._status(f"Loaded {len(boards)} boards.")
         if boards:
@@ -1404,6 +1632,7 @@ class MainWindow(QMainWindow):
         self._status(f"Loaded {len(issues)} stories.")
         self.story_count_lbl.setText(f"{len(issues)} stories")
         self.new_story_btn.setEnabled(True)
+        self.import_btn.setEnabled(True)
 
     def _populate_table(self, issues):
         self.table.setRowCount(0)
@@ -1431,7 +1660,8 @@ class MainWindow(QMainWindow):
             a_item.setForeground(QColor(TEXT_SEC))
             self.table.setItem(row, 2, a_item)
 
-            pts = f.get("customfield_10016") or f.get("story_points") or ""
+            sp_field = getattr(self, "_sp_field", "customfield_10016")
+            pts = f.get(sp_field) or f.get("customfield_10016") or f.get("story_points") or ""
             pts_item = QTableWidgetItem(str(int(pts)) if pts else "—")
             pts_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 3, pts_item)
@@ -1444,13 +1674,19 @@ class MainWindow(QMainWindow):
 
             self.table.setRowHeight(row, 40)
 
+    # New method
+    def _on_members_loaded(self, members: list):
+        self.edit_panel.set_members(members)
+
+
+    # Updated to also check assignee column
     def _filter_table(self, text: str):
         text = text.lower()
         for row in range(self.table.rowCount()):
             match = any(
                 text in (self.table.item(row, col).text().lower() if self.table.item(row, col) else "")
                 for col in range(self.table.columnCount())
-            )
+            ) if text else True
             self.table.setRowHidden(row, not match)
 
     def _on_story_selected(self):
@@ -1468,8 +1704,120 @@ class MainWindow(QMainWindow):
             # Load available transitions for this issue
             self._spawn(
                 self._client.get_issue_transitions, key,
-                on_result=lambda t: self.edit_panel.set_transitions(t),
+                on_result=self._on_members_loaded,
             )
+
+    def _import_comments(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Comments File", "",
+            "Text/Markdown Files (*.txt *.md);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except Exception as e:
+            QMessageBox.critical(self, "File Error", f"Could not read file:\n{e}")
+            return
+
+        parsed = self._parse_comments_file(raw)
+        if not parsed:
+            QMessageBox.warning(self, "No Entries Found",
+                "No valid entries found in the file.\n\nExpected format:\nMDT-123: Your comment text here")
+            return
+
+        # Build set of loaded keys and a summary+assignee lookup
+        loaded_keys = set()
+        # {key: (summary, assignee_display_name)}
+        story_info = {}
+        for row in range(self.table.rowCount()):
+            key_item     = self.table.item(row, 0)
+            summary_item = self.table.item(row, 1)
+            assignee_item= self.table.item(row, 2)
+            if key_item:
+                k = key_item.text()
+                loaded_keys.add(k)
+                story_info[k] = (
+                    summary_item.text() if summary_item else "",
+                    assignee_item.text() if assignee_item else "",
+                )
+
+        # Build other instance client if settings available
+        other_client = None
+        s = self._settings
+        active_mode = s.get("mode", JiraClient.MODE_SENTINEL)
+        if active_mode == JiraClient.MODE_SENTINEL and s.get("acyd_url") and s.get("acyd_token"):
+            other_client = JiraClient(s["acyd_url"], s["acyd_token"], JiraClient.MODE_ACYD)
+        elif active_mode == JiraClient.MODE_ACYD and s.get("sentinel_url") and s.get("sentinel_token"):
+            other_client = JiraClient(s["sentinel_url"], s["sentinel_token"], JiraClient.MODE_SENTINEL)
+
+        # Find cross-instance matches by summary + assignee
+        # cross_map: {active_key: other_instance_key}
+        cross_map = {}
+        if other_client:
+            for key, comment in parsed.items():
+                if key not in story_info:
+                    continue
+                summary, assignee = story_info[key]
+                if not summary:
+                    continue
+                # Escape quotes in JQL
+                safe_summary = summary.replace('"', '\\"')
+                jql = f'summary = "{safe_summary}"'
+                if assignee and assignee != "—":
+                    safe_assignee = assignee.replace('"', '\\"')
+                    jql += f' AND assignee = "{safe_assignee}"'
+                matches = other_client.search_issues_jql(jql, fields="summary,assignee")
+                if matches:
+                    cross_map[key] = matches[0]["key"]
+
+        cross_keys = set(cross_map.keys())
+        dlg = ImportCommentsDialog(parsed, loaded_keys, cross_keys, cross_map, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            to_post = dlg.get_comments()
+            if to_post:
+                self._busy(True)
+                n = len(to_post)
+                nc = len({k for k in to_post if k in cross_keys})
+                self._status(f"Posting {n} comments ({nc} to both instances)…")
+                self._spawn(
+                    self._post_imported_comments, to_post, cross_map, other_client,
+                    on_result=lambda _: (
+                        self._busy(False),
+                        self._status(f"✓ Posted {n} comments successfully.")
+                    )
+                )
+
+    def _parse_comments_file(self, raw: str) -> dict:
+        """Parse file with format: KEY: comment text (one per line)."""
+        import re
+        result = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Match patterns like MDT-123: comment or MDT-123 : comment
+            match = re.match(r'^([A-Z][A-Z0-9]+-\d+)\s*:\s*(.+)$', line)
+            if match:
+                key = match.group(1).strip()
+                comment = match.group(2).strip()
+                if comment:
+                    result[key] = comment
+        return result
+
+    def _post_imported_comments(self, comments: dict,
+                                cross_map: dict = None, other_client=None):
+        cross_map = cross_map or {}
+        for key, comment in comments.items():
+            self._client.add_comment(key, comment)
+            if other_client and key in cross_map:
+                other_key = cross_map[key]
+                try:
+                    other_client.add_comment(other_key, comment)
+                except Exception:
+                    pass  # Don't fail batch if cross-post fails
+        return True
 
     # ── New Story ─────────────────────────────────────────────────────────────
     def _open_new_story(self):
@@ -1520,7 +1868,15 @@ class MainWindow(QMainWindow):
         )
 
     def _do_save(self, key, fields, comment, transition_id, target_sprint):
-        self._client.update_issue(key, fields)
+        try:
+            self._client.update_issue(key, fields)
+        except RuntimeError as e:
+            sp = self._client.story_point_field_id
+            if sp in str(e) or "customfield_10016" in str(e):
+                fields_no_pts = {k: v for k, v in fields.items() if k not in (sp, "customfield_10016")}
+                self._client.update_issue(key, fields_no_pts)
+            else:
+                raise
         if transition_id:
             self._client.transition_issue(key, transition_id)
         if target_sprint is not None:
