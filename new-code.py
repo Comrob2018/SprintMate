@@ -1,2 +1,22 @@
-ASSIGNEE FIELD: {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/user?username=M83906', 'name': 'M83906', 'key': 'JIRAUSER12192', 'emailAddress': 'Simeon.Briscoe@ngc.com', 'avatarUrls': {'48x48': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?ownerId=JIRAUSER12192&avatarId=21446', '24x24': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=small&ownerId=JIRAUSER12192&avatarId=21446', '16x16': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=xsmall&ownerId=JIRAUSER12192&avatarId=21446', '32x32': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=medium&ownerId=JIRAUSER12192&avatarId=21446'}, 'displayName': 'Briscoe, Simeon V [US] (MS)', 'active': True, 'timeZone': 'America/Denver'}
-Members Sample: [{'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/user?username=M89517', 'key': 'JIRAUSER30211', 'name': 'M89517', 'emailAddress': 'Sachith.Abayakoon@ngc.com', 'avatarUrls': {'48x48': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?avatarId=10336', '24x24': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=small&avatarId=10336', '16x16': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=xsmall&avatarId=10336', '32x32': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=medium&avatarId=10336'}, 'displayName': 'Abayakoon, Sachith [US] (DS)', 'active': True, 'deleted': False, 'timeZone': 'America/Denver', 'locale': 'en_US'}, {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/user?username=N26762', 'key': 'JIRAUSER30350', 'name': 'N26762', 'emailAddress': 'Dennis.Abdelhamid@ngc.com', 'avatarUrls': {'48x48': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?avatarId=10122', '24x24': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=small&avatarId=10122', '16x16': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=xsmall&avatarId=10122', '32x32': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=medium&avatarId=10122'}, 'displayName': 'Abdelhamid, Dennis [US] (AS)', 'active': True, 'deleted': False, 'timeZone': 'America/Denver', 'locale': 'en_US'}]
+def set_members(self, members: list):
+    if members and "to" in members[0]:
+        return
+    self._members = members
+    self.assignee_combo.clear()
+    self.assignee_combo.addItem("— Unassigned —", None)
+    for m in members:
+        uid = m.get("name") or m.get("key") or m.get("accountId")
+        display = m.get("displayName") or m.get("name") or "?"
+        self.assignee_combo.addItem(display, uid)
+
+    print(f"PENDING ASSIGNEE: {getattr(self, '_pending_assignee', 'NOT SET')}")
+    print(f"COMBO ITEMS: {[self.assignee_combo.itemData(i) for i in range(self.assignee_combo.count())]}")
+
+    if getattr(self, "_pending_assignee", None):
+        for i in range(self.assignee_combo.count()):
+            if self.assignee_combo.itemData(i) == self._pending_assignee:
+                self.assignee_combo.setCurrentIndex(i)
+                print(f"MATCHED AT INDEX {i}")
+                break
+        else:
+            print("NO MATCH FOUND")
