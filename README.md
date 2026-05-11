@@ -53,6 +53,6 @@ Click **Test Connection** to verify before saving.
 
 - The app uses the **Jira Cloud REST API v3** and the **Agile/Software API** for boards and sprints.
 - Story points map to `customfield_10016` (standard for Jira Cloud next-gen projects).
-- Only **Jira Cloud** is supported (email + API token auth). Jira Server/DC uses different auth.
+- Only Jira Server/DC supported in this version uses different auth.
 - All API calls run on background threads — the UI stays responsive during loads.
 - The filter box (top-right of the table) filters stories live by any column text.
