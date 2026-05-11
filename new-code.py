@@ -182,3 +182,29 @@ def _create_story_with_assignee(self, project_key: str, vals: dict):
     if key and vals.get("sprint_id"):
         self._client.move_to_sprint(key, vals["sprint_id"])
     return issue
+    
+    
+    
+def _on_projects_loaded(self, projects):
+    self._busy(False)
+    self.project_combo.blockSignals(True)
+    self.project_combo.clear()
+    for p in projects:
+        self.project_combo.addItem(f"{p['key']} — {p['name']}", p["key"])
+    mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+    default_key = self._settings.get(f"{mode}_default_project", "")
+    if default_key:
+        for i in range(self.project_combo.count()):
+            if self.project_combo.itemData(i) == default_key:
+                self.project_combo.setCurrentIndex(i)
+                break
+    self.project_combo.blockSignals(False)
+    self.project_combo.setEnabled(True)
+    self.board_combo.setEnabled(True)
+    self.sprint_combo.setEnabled(True)
+    self.load_btn.setEnabled(True)
+    self._status(f"Loaded {len(projects)} projects.")
+    # Always trigger project changed, not just when default is set
+    if projects:
+        self._on_project_changed()
+
