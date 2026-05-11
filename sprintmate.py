@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QDateEdit, QFileDialog
 )
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QDate
+    Qt, QThread, pyqtSignal, QDate, QTimer
 )
 from PyQt6.QtGui import (
     QColor, QPalette
@@ -451,17 +451,31 @@ class JiraClient:
 
     def get_project_members(self, project_key: str):
         encoded = urllib.parse.quote(project_key)
-        url = (f"{self.base_url}/rest/api/{self.api_version}/"
-            f"user/assignable/search?project={encoded}&maxResults=100")
-        req = urllib.request.Request(url, headers=self.headers)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                result = json.loads(resp.read().decode())
-                return result if isinstance(result, list) else []
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
-        except Exception:
-            return []
+        all_members = []
+        start = 0
+        max_results = 200
+
+        while True:
+            url = (f"{self.base_url}/rest/api/{self.api_version}/"
+                f"user/assignable/search?project={encoded}"
+                f"&maxResults={max_results}&startAt={start}")
+            req = urllib.request.Request(url, headers=self.headers)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    result = json.loads(resp.read().decode())
+                    batch = result if isinstance(result, list) else []
+                    if not batch:
+                        break
+                    all_members.extend(batch)
+                    if len(batch) < max_results:
+                        break
+                    start += max_results
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
+            except Exception:
+                break
+
+        return all_members
         
     def update_issue(self, issue_key: str, fields: dict):
         self._request("PUT", f"issue/{issue_key}", {"fields": fields})
@@ -860,9 +874,11 @@ class SettingsDialog(QDialog):
         self.token_edit.setPlaceholderText("Personal Access Token")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("PAT Token:", self.token_edit)
+        
         self.default_project_edit = QLineEdit()
         self.default_project_edit.setPlaceholderText("e.g. MDT  (auto-selects on connect)")
         form.addRow("Default Project:", self.default_project_edit)
+        
         self.default_board_edit = QLineEdit()
         self.default_board_edit.setPlaceholderText("e.g. MDT board  (auto-selects on connect)")
         form.addRow("Default Board:", self.default_board_edit)
@@ -1004,7 +1020,7 @@ class StoryEditPanel(QFrame):
         form.setSpacing(10)
 
         self.assignee_combo = QComboBox()
-        self.assignee_combo.setMinimumWidth(200)
+        self.assignee_combo.setMinimumWidth(1000)
         form.addRow("Assignee:", self.assignee_combo)
         
         self.feature_link_edit = QLineEdit()
@@ -1106,17 +1122,26 @@ class StoryEditPanel(QFrame):
 
 
     def set_members(self, members: list):
-        # Guard: ignore if this looks like transitions data not user data
         if members and "to" in members[0]:
             return
         self._members = members
         self.assignee_combo.clear()
         self.assignee_combo.addItem("— Unassigned —", None)
         for m in members:
-            # DC uses 'name' as the username key for assignee updates
             uid = m.get("name") or m.get("key") or m.get("accountId")
             display = m.get("displayName") or m.get("name") or "?"
             self.assignee_combo.addItem(display, uid)
+
+        if getattr(self, "_pending_assignee", None):
+            found = False
+            for i in range(self.assignee_combo.count()):
+                if self.assignee_combo.itemData(i) == self._pending_assignee:
+                    self.assignee_combo.setCurrentIndex(i)
+                    found = True
+                    break
+            if not found:
+                self.assignee_combo.insertItem(1, f"{self._pending_assignee} (current)", self._pending_assignee)
+                self.assignee_combo.setCurrentIndex(1)
 
     def set_issue_types(self, issue_types: list):
         self.issuetype_combo.clear()
@@ -1150,13 +1175,23 @@ class StoryEditPanel(QFrame):
 
         # Assignee
         assignee = fields.get("assignee")
-        self.assignee_combo.setCurrentIndex(0)
         if assignee:
-            aid = assignee.get("name") or assignee.get("key") or assignee.get("accountId")
+            self._pending_assignee = (
+                assignee.get("name") or assignee.get("key") or assignee.get("accountId")
+            )
+            # Try to set immediately in case members are already loaded
             for i in range(self.assignee_combo.count()):
-                if self.assignee_combo.itemData(i) == aid:
+                if self.assignee_combo.itemData(i) == self._pending_assignee:
                     self.assignee_combo.setCurrentIndex(i)
                     break
+            else:
+                # Not found — add them manually so they always appear
+                display = assignee.get("displayName", self._pending_assignee)
+                self.assignee_combo.insertItem(1, display, self._pending_assignee)
+                self.assignee_combo.setCurrentIndex(1)
+        else:
+            self._pending_assignee = None
+            self.assignee_combo.setCurrentIndex(0)
 
         # Issue type
         itype = fields.get("issuetype", {})
@@ -1192,15 +1227,14 @@ class StoryEditPanel(QFrame):
             fl_value = fl_value.get("url", "") or fl_value.get("id", "")
         self.feature_link_edit.setText(str(fl_value) if fl_value else "")
 
-
-        # Sprint — find current sprint from customfield_10020
+        # Sprint
         sprint_field = fields.get("customfield_10020") or []
         if isinstance(sprint_field, list) and sprint_field:
             current_sprint = sprint_field[-1]
             self._current_sprint_id = current_sprint.get("id")
         else:
             self._current_sprint_id = None
-        self.sprint_combo.setCurrentIndex(0)  # default to "Keep current"
+        self.sprint_combo.setCurrentIndex(0)
 
         # Due date
         duedate = fields.get("duedate")
@@ -1214,7 +1248,7 @@ class StoryEditPanel(QFrame):
             self.due_date.setDate(QDate.currentDate())
             self.due_date.setStyleSheet(f"color: {TEXT_DIM};")
 
-        # Status transitions — reset; caller will populate via set_transitions
+        # Status transitions
         self.transition_combo.setCurrentIndex(0)
 
         # Description
@@ -1275,10 +1309,7 @@ class StoryEditPanel(QFrame):
         # Description
         desc_text = self.desc_edit.toPlainText().strip()
         if desc_text:
-            fields["description"] = {
-                "type": "doc", "version": 1,
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": desc_text}]}]
-            }
+            fields["description"] = desc_text
 
         # Sprint move target (None = no change)
         target_sprint = self.sprint_combo.currentData()
@@ -1701,10 +1732,9 @@ class MainWindow(QMainWindow):
         issue = next((i for i in self._issues if i["key"] == key), None)
         if issue:
             self.edit_panel.load_issue(issue)
-            # Load available transitions for this issue
             self._spawn(
                 self._client.get_issue_transitions, key,
-                on_result=self._on_members_loaded,
+                on_result=self.edit_panel.set_transitions,  # ← Fix: route directly
             )
 
     def _import_comments(self):
