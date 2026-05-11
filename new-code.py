@@ -1,3 +1,32 @@
+def get_project_members(self, project_key: str):
+    encoded = urllib.parse.quote(project_key)
+    all_members = []
+    start = 0
+    max_results = 200
+
+    while True:
+        url = (f"{self.base_url}/rest/api/{self.api_version}/"
+               f"user/assignable/search?project={encoded}"
+               f"&maxResults={max_results}&startAt={start}")
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode())
+                batch = result if isinstance(result, list) else []
+                if not batch:
+                    break
+                all_members.extend(batch)
+                if len(batch) < max_results:
+                    break
+                start += max_results
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
+        except Exception:
+            break
+
+    return all_members
+
+
 def set_members(self, members: list):
     if members and "to" in members[0]:
         return
