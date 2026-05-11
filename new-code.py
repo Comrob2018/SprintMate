@@ -1,1 +1,10 @@
-HTTP 400: [PUT https://jira.sde.sp.gc1.myngc.com/rest/api/2/issue/MDT-111867] {"errorMessages":[],"errors":{"description":"Operation value must be a string"}}
+# DELETE this:
+if desc_text:
+    fields["description"] = {
+        "type": "doc", "version": 1,
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": desc_text}]}]
+    }
+
+# REPLACE with this:
+if desc_text:
+    fields["description"] = desc_text
