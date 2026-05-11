@@ -1,4 +1,41 @@
-PENDING ASSIGNEE: NOT SET
-COMBO ITEMS: [None, 'M89517', 'N26762', 'N36400', 'abidmo', 'P07600', 'N29504', 'G83322', 's161177', 'J66398', 'J58300', 'M24333', 'N58265', 'M56621', 's382745', 'N40946', 'N63427', 'M86771', 'N67033', 'N14447', 'N31244', 'N25044', 'N31632', 'addeoma', 'N61708', 'P03083', 'N08677', 'e51157', 'N61943', 'N34273', 'P14032', 'M32004', 'M58856', 'P11830', 'M82809', 'N16729', 'G82637', 'J42523', 'N37879', 'N31878', 'N53694', 'N18979', 'M80727', 'M87624', 'M53942', 'AhmadRe', 'M48132', 'N44545', 'P07869', 'J86547', 'N46693', 'N49053', 'N52410', 'J76093', 'N59804', 'P06130', 'N33511', 'N55686', 'N33207', 'N41260', 'M34909', 'P07353', 'N73523', 'J12139', 'M23333', 'S822964', 'N80961', 'J88008', 'J69903', 'N61236', 'N27860', 'J18981', 'M33363', 'M28140', 'N10191', 'N26865', 'e56537', 'N47094', 'J01650', 'e74383', 'M58767', 'e26232', 'M35820', 'N42693', 'N41702', 'N32016', 'M23085', 'N60833', 's114147', 'N55362', 'AlleyJa', 'N07943', 'P15258', 'M73131', 'M57239', 'M59091', 'G87514', 'P06605', 'N62453', 'altovjo', 'N18294']
-ASSIGNEE FIELD: {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/user?username=M83906', 'name': 'M83906', 'key': 'JIRAUSER12192', 'emailAddress': 'Simeon.Briscoe@ngc.com', 'avatarUrls': {'48x48': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?ownerId=JIRAUSER12192&avatarId=21446', '24x24': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=small&ownerId=JIRAUSER12192&avatarId=21446', '16x16': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=xsmall&ownerId=JIRAUSER12192&avatarId=21446', '32x32': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=medium&ownerId=JIRAUSER12192&avatarId=21446'}, 'displayName': 'Briscoe, Simeon V [US] (MS)', 'active': True, 'timeZone': 'America/Denver'}
-Members Sample: [{'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/user?username=M89517', 'key': 'JIRAUSER30211', 'name': 'M89517', 'emailAddress': 'Sachith.Abayakoon@ngc.com', 'avatarUrls': {'48x48': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?avatarId=10336', '24x24': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=small&avatarId=10336', '16x16': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=xsmall&avatarId=10336', '32x32': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=medium&avatarId=10336'}, 'displayName': 'Abayakoon, Sachith [US] (DS)', 'active': True, 'deleted': False, 'timeZone': 'America/Denver', 'locale': 'en_US'}, {'self': 'https://jira.sde.sp.gc1.myngc.com/rest/api/2/user?username=N26762', 'key': 'JIRAUSER30350', 'name': 'N26762', 'emailAddress': 'Dennis.Abdelhamid@ngc.com', 'avatarUrls': {'48x48': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?avatarId=10122', '24x24': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=small&avatarId=10122', '16x16': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=xsmall&avatarId=10122', '32x32': 'https://jira.sde.sp.gc1.myngc.com/secure/useravatar?size=medium&avatarId=10122'}, 'displayName': 'Abdelhamid, Dennis [US] (AS)', 'active': True, 'deleted': False, 'timeZone': 'America/Denver', 'locale': 'en_US'}]
+The output confirms it — set_members fires first, then load_issue runs after. So _pending_assignee is never set when set_members runs.
+Also notice M83906 (Briscoe) is not in the combo items list — meaning he’s not in the assignable users list returned by the API, probably because he’s not formally assigned to the project role but is assigned to the ticket anyway.
+Two fixes needed:
+1. In load_issue, immediately set the combo after members are loaded by calling the reapply logic directly:
+
+assignee = fields.get("assignee")
+if assignee:
+    self._pending_assignee = (
+        assignee.get("name") or assignee.get("key") or assignee.get("accountId")
+    )
+    # Try to set immediately in case members are already loaded
+    for i in range(self.assignee_combo.count()):
+        if self.assignee_combo.itemData(i) == self._pending_assignee:
+            self.assignee_combo.setCurrentIndex(i)
+            break
+    else:
+        # Not found — add them manually so they always appear
+        display = assignee.get("displayName", self._pending_assignee)
+        self.assignee_combo.insertItem(1, display, self._pending_assignee)
+        self.assignee_combo.setCurrentIndex(1)
+else:
+    self._pending_assignee = None
+    self.assignee_combo.setCurrentIndex(0)
+
+
+2. In set_members, after rebuilding the list, re-add the pending assignee if they’re missing:
+
+if getattr(self, "_pending_assignee", None):
+    found = False
+    for i in range(self.assignee_combo.count()):
+        if self.assignee_combo.itemData(i) == self._pending_assignee:
+            self.assignee_combo.setCurrentIndex(i)
+            found = True
+            break
+    if not found:
+        # Person assigned to ticket isn't in the project member list
+        self.assignee_combo.insertItem(1, f"{self._pending_assignee} (current)", self._pending_assignee)
+        self.assignee_combo.setCurrentIndex(1)
+
+
+This handles both timing cases and the fact that Briscoe isn’t in your assignable users list.​​​​​​​​​​​​​​​​
