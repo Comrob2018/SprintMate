@@ -42,7 +42,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.1.1"
+APP_VERSION  = "2.1.2"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -392,8 +392,11 @@ class JiraClient:
     def get_sprints(self, board_id: int):
         url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint?state=active,future&maxResults=20"
         req = urllib.request.Request(url, headers=self.headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode()).get("values", [])
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode()).get("values", [])
+        except Exception:
+            return []
 
     def get_sprint_issues(self, board_id: int, sprint_id: int):
         sp = self.story_point_field_id
@@ -580,12 +583,28 @@ class JiraClient:
                 raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
     def search_users(self, query: str):
-        encoded = urllib.parse.quote(query)
-        url = f"{self.base_url}/rest/api/{self.api_version}/user/search?query={encoded}&maxResults=20"
-        req = urllib.request.Request(url, headers=self.headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read().decode())
-            return result if isinstance(result, list) else []
+        all_users = []
+        start = 0
+        max_results = 200
+
+        while True:
+            encoded = urllib.parse.quote(query or ".")
+            url = (f"{self.base_url}/rest/api/{self.api_version}/user/search"
+                f"?username={encoded}&maxResults={max_results}&startAt={start}")
+            req = urllib.request.Request(url, headers=self.headers)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    batch = json.loads(resp.read().decode())
+                    if not isinstance(batch, list) or not batch:
+                        break
+                    all_users.extend(batch)
+                    if len(batch) < max_results:
+                        break
+                    start += max_results
+            except Exception:
+                break
+
+        return all_users
 
     def invite_user(self, email: str, project_key: str, role_id: int):
         """Cloud only – create new user invite via Atlassian API."""
@@ -2328,12 +2347,22 @@ class MainWindow(QMainWindow):
         key = self.project_combo.currentData()
         if not key or not self._client:
             return
+
+        # Always do a full paginated user search for the dialog
+        # rather than using the project-scoped members list which
+        # may be incomplete or restricted
+        try:
+            members = self._client.search_users("")
+            members.sort(key=lambda m: m.get("displayName", "").lower())
+        except Exception:
+            members = self.edit_panel._members  # fall back to whatever we have
+
         dlg = NewStoryDialog(
             project_key=key,
-            members=self.edit_panel._members,
+            members=members,
             issue_types=[{"name": self.edit_panel.issuetype_combo.itemText(i),
-                          "id": self.edit_panel.issuetype_combo.itemData(i)}
-                         for i in range(self.edit_panel.issuetype_combo.count())],
+                        "id": self.edit_panel.issuetype_combo.itemData(i)}
+                        for i in range(self.edit_panel.issuetype_combo.count())],
             sprints=self._sprints,
             parent=self,
         )
