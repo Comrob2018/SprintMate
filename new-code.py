@@ -1,1 +1,6 @@
-self.type_combo.addItem(it.get("name", "?"), it.get("id"))
+[2.1.3] — 2026-05-12
+Bug Fixes
+	•	Both assignee lists now show all instance users including project members. get_project_members now calls both the project-scoped user/assignable/search endpoint and the instance-wide user/search wildcard endpoint, merging and deduplicating results by username so no users are missing from either list.
+	•	Assignee list now sorted alphabetically in both edit panel and new story dialog. Members are sorted by displayName before being passed to either the edit panel or NewStoryDialog.
+	•	New story creation no longer fails with invalid issue type error. NewStoryDialog was storing the issue type name as the combo data instead of the id, causing create_issue to send an invalid payload. Fixed to store id as the combo data.
+	•	New story issue types now fetched fresh on dialog open. _open_new_story was building the issue types list from the edit panel combo, which may be empty if get_issue_types failed due to access restrictions on project change. Now calls get_issue_types directly when the dialog opens, falling back to the combo contents only if that fails.​​​​​​​​​​​​​​​​
