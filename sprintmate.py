@@ -42,7 +42,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.0.0"
+APP_VERSION  = "2.1.1"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -380,8 +380,14 @@ class JiraClient:
     def get_boards(self, project_key: str):
         url = f"{self.base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}"
         req = urllib.request.Request(url, headers=self.headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode()).get("values", [])
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode()).get("values", [])
+        except urllib.error.HTTPError:
+            return []
+        except Exception:
+            return []
+
 
     def get_sprints(self, board_id: int):
         url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint?state=active,future&maxResults=20"
@@ -421,9 +427,12 @@ class JiraClient:
         self._request("POST", f"issue/{issue_key}/transitions", {"transition": {"id": transition_id}})
 
     def get_issue_types(self, project_key: str):
-        result = self._request("GET", f"project/{project_key}")
-        return result.get("issueTypes", [])
-
+        try:
+            result = self._request("GET", f"project/{project_key}")
+            return result.get("issueTypes", [])
+        except Exception:
+            return []
+        
     def get_priorities(self):
         url = f"{self.base_url}/rest/api/{self.api_version}/priority/search?maxResults=50"
         req = urllib.request.Request(url, headers=self.headers)
@@ -1772,6 +1781,27 @@ class MainWindow(QMainWindow):
             return base64.b64decode(encoded.encode()).decode() if encoded else ""
         except Exception:
             return ""
+        
+    def _clear_sprint_view(self):
+        """Reset boards, sprints, story table, and edit panel."""
+        self.board_combo.blockSignals(True)
+        self.board_combo.clear()
+        self.board_combo.blockSignals(False)
+
+        self.sprint_combo.blockSignals(True)
+        self.sprint_combo.clear()
+        self.sprint_combo.blockSignals(False)
+
+        self.table.setRowCount(0)
+        self.story_count_lbl.setText("No stories loaded")
+        self._issues = []
+
+        self.edit_panel.current_key = None
+        self.edit_panel.title_lbl.setText("Select a story to edit")
+        self.edit_panel.key_lbl.setText("")
+        self.edit_panel.status_badge.setText("")
+        self.edit_panel.save_btn.setEnabled(False)
+        self.edit_panel._snapshot = {}
 
     def _save_settings(self):
         qs = QSettings("SprintMate", "SprintMate")
@@ -1875,6 +1905,7 @@ class MainWindow(QMainWindow):
         self._save_settings()
         self._check_token_expiry()
         self._status(f"Switched to {mode_label} — reloading projects…")
+        self._clear_sprint_view()
         self._load_projects()
 
     # ── Loading helpers ───────────────────────────────────────────────────────
@@ -1926,26 +1957,30 @@ class MainWindow(QMainWindow):
         self.sprint_combo.setEnabled(True)
         self.load_btn.setEnabled(True)
         self._status(f"Loaded {len(projects)} projects.")
-        if projects and default_key:
+        if projects:
             self._on_project_changed()
 
     def _on_project_changed(self):
         key = self.project_combo.currentData()
         if not key or not self._client:
             return
+        self._clear_sprint_view()
         self._busy(True)
         self._status(f"Loading boards for {key}…")
         self._spawn(
             self._client.get_boards, key,
             on_result=self._on_boards_loaded,
+            on_error=lambda e: self._status(f"⚠ Could not load boards for {key} (access restricted)"),
         )
         self._spawn(
             self._client.get_project_members, key,
             on_result=lambda members: self.edit_panel.set_members(members),
+            on_error=lambda e: self._status(f"⚠ Could not load assignees for {key} (access restricted)"),
         )
         self._spawn(
             self._client.get_issue_types, key,
             on_result=lambda types: self.edit_panel.set_issue_types(types),
+            on_error=lambda e: self._status(f"⚠ Could not load issue types for {key} (access restricted)"),
         )
 
 
@@ -1972,6 +2007,15 @@ class MainWindow(QMainWindow):
         bid = self.board_combo.currentData()
         if bid is None or not self._client:
             return
+        
+        self.sprint_combo.blockSignals(True)
+        self.sprint_combo.clear()
+        self.sprint_combo.blockSignals(False)
+        
+        self.table.setRowCount(0)
+        self.story_count_lbl.setText("No stories loaded")
+        self._issues = []
+        
         self._busy(True)
         self._status("Loading sprints…")
         self._spawn(
