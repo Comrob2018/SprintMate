@@ -1,7 +1,21 @@
-[2.1.2] — 2026-05-12
-Bug Fixes
-	•	Remaining HTTP 400 errors on instance switch suppressed. get_sprints was missing error handling and would raise through _request to the default modal handler on restricted projects. Wrapped in try/except to return an empty list on failure.
-	•	New story assignee list no longer limited to project members. _open_new_story was using self.edit_panel._members which is populated by the project-scoped get_project_members call and may be empty or restricted. Now always calls search_users directly, falling back to the cached members list only if that fails.
-	•	New story assignee list now fully paginated. search_users was capped at 200 results with no pagination, cutting off users whose names appear later alphabetically. Refactored to paginate in batches of 200 using startAt until the full user list is retrieved, consistent with the existing get_project_members pagination pattern.
-Improvements
-	•	New story assignee list sorted alphabetically. Members returned from search_users are now sorted by displayName before being passed to NewStoryDialog, making it easier to locate assignees regardless of the order the API returns them.​​​​​​​​​​​​​​​​
+Then revert _on_project_changed back to using get_project_members, and revert _open_new_story to use self.edit_panel._members instead of calling search_users:
+In _on_project_changed:
+
+self._spawn(
+    self._client.get_project_members, key,
+    on_result=lambda members: self.edit_panel.set_members(
+        sorted(members, key=lambda m: m.get("displayName", "").lower())
+    ),
+    on_error=lambda e: self._status(f"⚠ Could not load assignees (access restricted)"),
+)
+
+
+In _open_new_story:
+
+members = sorted(
+    self.edit_panel._members,
+    key=lambda m: m.get("displayName", "").lower()
+)
+
+
+And remove the search_users call from _open_new_story entirely. Both will now use the same project-scoped paginated list that get_project_members already fetches.​​​​​​​​​​​​​​​​
