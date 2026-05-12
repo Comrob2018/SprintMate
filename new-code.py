@@ -1,17 +1,4 @@
-def get_boards(self, project_key: str):
-    url = f"{self.base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}"
-    req = urllib.request.Request(url, headers=self.headers)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode()).get("values", [])
-    except urllib.error.HTTPError:
-        return []
-    except Exception:
-        return []
-
-def get_issue_types(self, project_key: str):
-    try:
-        result = self._request("GET", f"project/{project_key}")
-        return result.get("issueTypes", [])
-    except Exception:
-        return []
+[2.1.1] — 2026-05-12
+Bug Fixes
+	•	Restricted project boards no longer raise error dialogs. get_boards was missing error handling and would raise through _request to the default modal handler. Wrapped in try/except to return an empty list on failure.
+	•	Restricted project issue types no longer raise error dialogs. get_issue_types had the same issue. Wrapped in try/except to return an empty list on failure, keeping the combo at its default state without alerting the user.​​​​​​​​​​​​​​​​
