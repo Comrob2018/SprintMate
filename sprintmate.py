@@ -9,6 +9,7 @@ import base64
 import urllib.request
 import urllib.parse
 import urllib.error
+from datetime import date
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox,
@@ -19,7 +20,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QDateEdit, QFileDialog
 )
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QDate, QTimer
+    Qt, QThread, pyqtSignal, QDate, QTimer, QSettings
 )
 from PyQt6.QtGui import (
     QColor, QPalette
@@ -40,6 +41,8 @@ TEXT_SEC     = "#8B949E"
 TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
+
+APP_VERSION  = "2.0.0"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -491,23 +494,32 @@ class JiraClient:
         self,
         project_key: str,
         summary: str,
-        description: str,
         issuetype_id: str,
-        story_points: int | None = None,
-        feature_link: str | None = None,
+        description: str = "",
+        assignee_id: str | None = None,
         priority: str | None = None,
+        story_points: int | None = None,
+        sprint_id: int | None = None,
         due_date: str | None = None,
+        feature_link: str | None = None,
     ) -> dict:
         """
         Build the payload and POST a new issue, using the dynamic field IDs
-        from the field‑map instead of hard‑coded ones.
+        from the field-map instead of hard-coded ones.
+        Argument order matches the _open_new_story call site exactly.
         """
-        fields = {
-            "project": {"key": project_key},
-            "summary": summary,
-            "description": description,
+        fields: dict = {
+            "project":   {"key": project_key},
+            "summary":   summary,
             "issuetype": {"id": issuetype_id},
         }
+
+        if description:
+            fields["description"] = description
+
+        # ---- Assignee -------------------------------------------------
+        if assignee_id:
+            fields["assignee"] = {"name": assignee_id}
 
         # ---- Priority -------------------------------------------------
         if priority:
@@ -515,8 +527,6 @@ class JiraClient:
 
         # ---- Story points (dynamic) ----------------------------------
         if story_points is not None:
-            # In the original code the field was hard‑coded as customfield_10016
-            # (see source) [1].  Now we use the mapped ID.
             fields[self.story_point_field_id] = story_points
 
         # ---- Feature link (dynamic) -----------------------------------
@@ -527,8 +537,16 @@ class JiraClient:
         if due_date:
             fields["duedate"] = due_date
 
-        # POST the request (your existing helper)
-        return self._request("POST", "issue", {"fields": fields})
+        result = self._request("POST", "issue", {"fields": fields})
+
+        # ---- Sprint assignment (Agile API, separate call) -------------
+        if sprint_id and result.get("key"):
+            try:
+                self.move_to_sprint(result["key"], sprint_id)
+            except Exception:
+                pass  # Story created; sprint move is best-effort
+
+        return result
 
     # ── User management ───────────────────────────────────────────────────────
     def get_project_roles(self, project_key: str):
@@ -707,18 +725,31 @@ class NewStoryDialog(QDialog):
 
 # ------------------IMPORT DIALOG CLASS------------------------------
 class ImportCommentsDialog(QDialog):
-    def __init__(self, parsed: dict, loaded_keys: set, cross_keys=None, cross_posts=None, parent=None):
+    def __init__(self, parsed: dict, loaded_keys: set, story_info: dict,
+                 cross_keys=None, cross_map=None, parent=None):
         """
         parsed      : {issue_key: comment_text} from the file
         loaded_keys : set of issue keys currently in the story table
+        story_info  : {issue_key: (summary, assignee)} from the story table
+        cross_keys  : set of keys that have a cross-instance match
+        cross_map   : {active_key: other_instance_key}
         """
         super().__init__(parent)
         self.setWindowTitle("Import Comments — Preview")
-        self.setMinimumWidth(620)
-        self.setMinimumHeight(440)
+        self.setMinimumWidth(860)
+        self.setMinimumHeight(520)
         self.setStyleSheet(parent.styleSheet() if parent else "")
 
-        self._parsed = parsed
+        self._parsed     = parsed
+        self._cross_map  = cross_map or {}
+        cross_keys       = cross_keys or set()
+
+        matched   = {k: v for k, v in parsed.items() if k in loaded_keys}
+        unmatched = {k: v for k, v in parsed.items() if k not in loaded_keys}
+
+        matched_count   = len(matched)
+        unmatched_count = len(unmatched)
+
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -727,48 +758,93 @@ class ImportCommentsDialog(QDialog):
         title.setObjectName("heading")
         layout.addWidget(title)
 
-        matched   = {k: v for k, v in parsed.items() if k in loaded_keys}
-        unmatched = {k: v for k, v in parsed.items() if k not in loaded_keys}
-
-        summary = QLabel(
+        summary_lbl = QLabel(
             f"Found {len(parsed)} entries — "
-            f"{len(matched)} matched to loaded stories, "
-            f"{len(unmatched)} not found in current sprint."
+            f"{matched_count} matched to loaded stories, "
+            f"{unmatched_count} not found in current sprint."
         )
-        summary.setObjectName("dim")
-        summary.setWordWrap(True)
-        layout.addWidget(summary)
+        summary_lbl.setObjectName("dim")
+        summary_lbl.setWordWrap(True)
+        layout.addWidget(summary_lbl)
 
+        # ── Preview table ────────────────────────────────────────────
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["KEY", "COMMENT", "STATUS"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(
+            ["KEY", "SUMMARY", "ASSIGNEE", "CROSS-POST TO", "COMMENT"]
+        )
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
 
-        for key, comment in parsed.items():
+
+        for key, entry in parsed.items():
+            comment  = entry["comment"]
+            summary  = entry.get("summary") or (story_info.get(key, ("", ""))[0]) or "—"
+            assignee = entry.get("assignee") or (story_info.get(key, ("", ""))[1]) or "—"
+
             row = self.table.rowCount()
             self.table.insertRow(row)
+
             key_item = QTableWidgetItem(key)
             key_item.setForeground(QColor(ACCENT_CYAN))
             self.table.setItem(row, 0, key_item)
-            self.table.setItem(row, 1, QTableWidgetItem(comment[:120] + ("…" if len(comment) > 120 else "")))
-            if key in loaded_keys:
-                status_item = QTableWidgetItem("✓ Will post")
-                status_item.setForeground(QColor(ACCENT_GREEN))
-            else:
-                status_item = QTableWidgetItem("✗ Not in sprint")
-                status_item.setForeground(QColor(ACCENT_ORG))
-            self.table.setItem(row, 2, status_item)
+
+            self.table.setItem(row, 1, QTableWidgetItem(summary))
+            self.table.setItem(row, 2, QTableWidgetItem(assignee))
+
+            cross_key  = (cross_map or {}).get(key, "")
+            cross_item = QTableWidgetItem(cross_key if cross_key else "—")
+            cross_item.setForeground(QColor(ACCENT_CYAN if cross_key else TEXT_DIM))
+            self.table.setItem(row, 3, cross_item)
+
+            truncated = comment[:100] + ("…" if len(comment) > 100 else "")
+            self.table.setItem(row, 4, QTableWidgetItem(truncated))
+
             self.table.setRowHeight(row, 36)
 
         layout.addWidget(self.table, 1)
 
+        # ── Detail pane (Option B) ────────────────────────────────────
+        self._detail_frame = QFrame()
+        self._detail_frame.setObjectName("card")
+        self._detail_frame.setVisible(False)
+        detail_layout = QVBoxLayout(self._detail_frame)
+        detail_layout.setContentsMargins(14, 10, 14, 10)
+        detail_layout.setSpacing(6)
+
+        detail_title = QLabel("SELECTED ENTRY")
+        detail_title.setObjectName("subheading")
+        detail_layout.addWidget(detail_title)
+
+        self._detail_key     = QLabel("")
+        self._detail_summary = QLabel("")
+        self._detail_assignee= QLabel("")
+        self._detail_cross   = QLabel("")
+        self._detail_comment = QTextEdit()
+        self._detail_comment.setReadOnly(True)
+        self._detail_comment.setMaximumHeight(70)
+
+        for lbl in (self._detail_key, self._detail_summary,
+                    self._detail_assignee, self._detail_cross):
+            lbl.setWordWrap(True)
+            detail_layout.addWidget(lbl)
+        detail_layout.addWidget(self._detail_comment)
+
+        layout.addWidget(self._detail_frame)
+
+        self.table.currentRowChanged.connect(self._on_row_changed)
+
+        # ── Footer ────────────────────────────────────────────────────
         if unmatched:
-            warn = QLabel(f"⚠  {len(unmatched)} keys not found will be skipped.")
+            warn = QLabel(f"⚠  {len(unmatched)} keys not found in current sprint will be skipped.")
             warn.setStyleSheet(f"color: {ACCENT_ORG}; font-size: 11px;")
             layout.addWidget(warn)
 
@@ -784,18 +860,50 @@ class ImportCommentsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-        self._to_post = matched
+        self._to_post = {k: entry["comment"] for k, entry in parsed.items() if k in loaded_keys}
+
+    def _on_row_changed(self, row: int):
+        if row < 0:
+            self._detail_frame.setVisible(False)
+            return
+        key_item = self.table.item(row, 0)
+        if not key_item:
+            self._detail_frame.setVisible(False)
+            return
+
+        key      = key_item.text()
+        summary  = self.table.item(row, 1).text() if self.table.item(row, 1) else "—"
+        assignee = self.table.item(row, 2).text() if self.table.item(row, 2) else "—"
+        cross    = self._cross_map.get(key, "")
+        entry    = self._parsed.get(key, {})
+        comment  = entry.get("comment", "") if isinstance(entry, dict) else entry
+
+        self._detail_key.setText(
+            f'<span style="color:{ACCENT_CYAN}; font-weight:bold;">{key}</span>'
+        )
+        self._detail_key.setTextFormat(Qt.TextFormat.RichText)
+        self._detail_summary.setText(f"Summary:  {summary}")
+        self._detail_assignee.setText(f"Assignee:  {assignee}")
+        self._detail_cross.setText(
+            f'Cross-post to:  <span style="color:{ACCENT_CYAN};">{cross}</span>'
+            if cross else
+            f'<span style="color:{TEXT_DIM};">No cross-instance match found.</span>'
+        )
+        self._detail_cross.setTextFormat(Qt.TextFormat.RichText)
+        self._detail_comment.setPlainText(comment)
+        self._detail_frame.setVisible(True)
 
     def get_cross_posts(self) -> dict:
-        return {k: v for k, v in self._cross_posts.items() if k in self._to_post}
-    
+        return {k: v for k, v in self._cross_map.items() if k in self._to_post}
+
     def get_comments(self) -> dict:
         return self._to_post
     
 # ── Worker threads ────────────────────────────────────────────────────────────
 class Worker(QThread):
-    result = pyqtSignal(object)
-    error  = pyqtSignal(str)
+    result   = pyqtSignal(object)
+    error    = pyqtSignal(str)
+    progress = pyqtSignal(int, int)   # (n_done, n_total) — optional; only emitted by functions that support it
 
     def __init__(self, fn, *args, **kwargs):
         super().__init__()
@@ -874,7 +982,22 @@ class SettingsDialog(QDialog):
         self.token_edit.setPlaceholderText("Personal Access Token")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("PAT Token:", self.token_edit)
-        
+
+        expiry_row = QHBoxLayout()
+        self.expiry_edit = QDateEdit()
+        self.expiry_edit.setCalendarPopup(True)
+        self.expiry_edit.setDisplayFormat("yyyy-MM-dd")
+        self.expiry_edit.setDate(QDate.currentDate().addYears(1))
+        self.expiry_clear_btn = QPushButton("Clear")
+        self.expiry_clear_btn.setFixedWidth(70)
+        self.expiry_clear_btn.clicked.connect(
+            lambda: self.expiry_edit.setDate(QDate.currentDate().addYears(1))
+        )
+        expiry_row.addWidget(self.expiry_edit)
+        expiry_row.addWidget(self.expiry_clear_btn)
+        expiry_row.addStretch()
+        form.addRow("Token Expiry:", expiry_row)
+
         self.default_project_edit = QLineEdit()
         self.default_project_edit.setPlaceholderText("e.g. MDT  (auto-selects on connect)")
         form.addRow("Default Project:", self.default_project_edit)
@@ -903,14 +1026,16 @@ class SettingsDialog(QDialog):
         # Internal store for both instances
         self._data = {
             JiraClient.MODE_SENTINEL: {
-                "url":   settings.get("sentinel_url", "https://jira.sde.sp.gc1.myngc.com/"),
-                "token": settings.get("sentinel_token", ""),
+                "url":           settings.get("sentinel_url", "https://jira.sde.sp.gc1.myngc.com/"),
+                "token":         settings.get("sentinel_token", ""),
+                "token_expiry":  settings.get("sentinel_token_expiry", ""),
                 "default_project": settings.get("sentinel_default_project", ""),
                 "default_board": settings.get("sentinel_default_board", ""),
             },
             JiraClient.MODE_ACYD: {
-                "url":   settings.get("acyd_url", "https://jira.northgrum.com/"),
-                "token": settings.get("acyd_token", ""),
+                "url":           settings.get("acyd_url", "https://jira.northgrum.com/"),
+                "token":         settings.get("acyd_token", ""),
+                "token_expiry":  settings.get("acyd_token_expiry", ""),
                 "default_project": settings.get("acyd_default_project", ""),
                 "default_board": settings.get("acyd_default_board", ""),
             },
@@ -922,6 +1047,7 @@ class SettingsDialog(QDialog):
         if hasattr(self, "_mode"):
             self._data[self._mode]["url"]   = self.url_edit.text().strip()
             self._data[self._mode]["token"] = self.token_edit.text().strip()
+            self._data[self._mode]["token_expiry"] = self.expiry_edit.date().toString("yyyy-MM-dd")
             self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
             self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
 
@@ -934,6 +1060,12 @@ class SettingsDialog(QDialog):
         # Load saved values for this instance
         self.url_edit.setText(self._data[mode]["url"])
         self.token_edit.setText(self._data[mode]["token"])
+        expiry_str = self._data[mode].get("token_expiry", "")
+        if expiry_str:
+            parts = expiry_str.split("-")
+            self.expiry_edit.setDate(QDate(int(parts[0]), int(parts[1]), int(parts[2])))
+        else:
+            self.expiry_edit.setDate(QDate.currentDate().addYears(1))
         self.default_project_edit.setText(self._data[mode]["default_project"])
         self.default_board_edit.setText(self._data[mode].get("default_board", ""))
         self.status_lbl.setText("")
@@ -955,8 +1087,9 @@ class SettingsDialog(QDialog):
     def _save_and_accept(self):
         self._data[self._mode]["url"]   = self.url_edit.text().strip()
         self._data[self._mode]["token"] = self.token_edit.text().strip()
+        self._data[self._mode]["token_expiry"] = self.expiry_edit.date().toString("yyyy-MM-dd")
         self._data[self._mode]["default_project"] = self.default_project_edit.text().strip().upper()
-        self._data[self._mode]["default_board"] = self.default_project_edit.text().strip().upper()
+        self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
         self.accept()
 
     def get_settings(self):
@@ -964,8 +1097,10 @@ class SettingsDialog(QDialog):
             "mode":           self._mode,
             "sentinel_url":   self._data[JiraClient.MODE_SENTINEL]["url"],
             "sentinel_token": self._data[JiraClient.MODE_SENTINEL]["token"],
+            "sentinel_token_expiry": self._data[JiraClient.MODE_SENTINEL].get("token_expiry", ""),
             "acyd_url":       self._data[JiraClient.MODE_ACYD]["url"],
             "acyd_token":     self._data[JiraClient.MODE_ACYD]["token"],
+            "acyd_token_expiry": self._data[JiraClient.MODE_ACYD].get("token_expiry", ""),
             # Active instance shortcuts
             "url":   self._data[self._mode]["url"],
             "token": self._data[self._mode]["token"],
@@ -988,6 +1123,7 @@ class StoryEditPanel(QFrame):
         self._sprints = []          # available sprints for move-to-sprint
         self._transitions = []      # available status transitions
         self._current_sprint_id = None
+        self._snapshot = {}         # field values at load time (for dirty detection)
         self._build_ui()
 
     def _build_ui(self):
@@ -1020,7 +1156,7 @@ class StoryEditPanel(QFrame):
         form.setSpacing(10)
 
         self.assignee_combo = QComboBox()
-        self.assignee_combo.setMinimumWidth(1000)
+        #self.assignee_combo.setMinimumWidth(1000)
         form.addRow("Assignee:", self.assignee_combo)
         
         self.feature_link_edit = QLineEdit()
@@ -1029,7 +1165,7 @@ class StoryEditPanel(QFrame):
 
         # Issue type
         self.issuetype_combo = QComboBox()
-        self.issuetype_combo.setMinimumWidth(160)
+        #self.issuetype_combo.setMinimumWidth(160)
         form.addRow("Issue Type:", self.issuetype_combo)
 
         # Priority
@@ -1049,7 +1185,7 @@ class StoryEditPanel(QFrame):
         # Fibonacci story points
         FIBONACCI = [None, 0, 1, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
-        self.points_combo.setMinimumWidth(140)
+        #self.points_combo.setMinimumWidth(140)
         self.points_combo.addItem("— Not set —", None)
         for v in FIBONACCI[1:]:
             self.points_combo.addItem(str(v), v)
@@ -1057,7 +1193,7 @@ class StoryEditPanel(QFrame):
 
         # Sprint
         self.sprint_combo = QComboBox()
-        self.sprint_combo.setMinimumWidth(200)
+        #self.sprint_combo.setMinimumWidth(200)
         form.addRow("Sprint:", self.sprint_combo)
 
         # Due date
@@ -1082,7 +1218,7 @@ class StoryEditPanel(QFrame):
         status_layout = QHBoxLayout(grp_status)
         status_layout.setSpacing(8)
         self.transition_combo = QComboBox()
-        self.transition_combo.setMinimumWidth(200)
+        #self.transition_combo.setMinimumWidth(200)
         self.transition_combo.addItem("— No transition —", None)
         status_layout.addWidget(self.transition_combo, 1)
         layout.addWidget(grp_status)
@@ -1095,6 +1231,20 @@ class StoryEditPanel(QFrame):
         self.desc_edit.setMinimumHeight(100)
         desc_layout.addWidget(self.desc_edit)
         layout.addWidget(grp_desc)
+
+        # ── Comment history ───────────────────────────────────────────────────
+        grp_history = QGroupBox("RECENT COMMENTS")
+        history_layout = QVBoxLayout(grp_history)
+        history_layout.setContentsMargins(8, 8, 8, 8)
+        self.comment_history = QTextEdit()
+        self.comment_history.setReadOnly(True)
+        self.comment_history.setMaximumHeight(120)
+        self.comment_history.setPlaceholderText("No comments yet.")
+        self.comment_history.setStyleSheet(
+            f"background: {DARK_BG}; border: none; color: {TEXT_SEC}; font-size: 12px;"
+        )
+        history_layout.addWidget(self.comment_history)
+        layout.addWidget(grp_history)
 
         # ── Comment ───────────────────────────────────────────────────────────
         grp_comment = QGroupBox("ADD COMMENT")
@@ -1115,10 +1265,51 @@ class StoryEditPanel(QFrame):
         self.save_btn.setEnabled(False)
         layout.addWidget(self.save_btn)
 
+        # ── Wire dirty-state detection ────────────────────────────────────────
+        self.assignee_combo.currentIndexChanged.connect(self._check_dirty)
+        self.feature_link_edit.textChanged.connect(self._check_dirty)
+        self.issuetype_combo.currentIndexChanged.connect(self._check_dirty)
+        self.priority_combo.currentIndexChanged.connect(self._check_dirty)
+        self.points_combo.currentIndexChanged.connect(self._check_dirty)
+        self.sprint_combo.currentIndexChanged.connect(self._check_dirty)
+        self.due_date.dateChanged.connect(self._check_dirty)
+        self.transition_combo.currentIndexChanged.connect(self._check_dirty)
+        self.desc_edit.textChanged.connect(self._check_dirty)
+        self.comment_edit.textChanged.connect(self._check_dirty)
+
     def _clear_due_date(self):
         self._due_set = False
         self.due_date.setStyleSheet(f"color: {TEXT_DIM};")
         self.due_date.setDate(QDate.currentDate())
+        self._check_dirty()
+
+    def _snapshot_state(self) -> dict:
+        """Capture a hashable snapshot of all editable field values."""
+        return {
+            "assignee":     self.assignee_combo.currentData(),
+            "feature_link": self.feature_link_edit.text(),
+            "issuetype":    self.issuetype_combo.currentData(),
+            "priority":     self.priority_combo.currentData(),
+            "points":       self.points_combo.currentData(),
+            "sprint":       self.sprint_combo.currentData(),
+            "due_set":      self._due_set,
+            "due_date":     self.due_date.date().toString("yyyy-MM-dd"),
+            "transition":   self.transition_combo.currentData(),
+            "desc":         self.desc_edit.toPlainText(),
+            "comment":      self.comment_edit.toPlainText(),
+        }
+
+    def _check_dirty(self):
+        """Enable/disable Save based on whether anything changed from the loaded snapshot."""
+        if not self.current_key:
+            return
+        current = self._snapshot_state()
+        is_dirty = (current != self._snapshot)
+        self.save_btn.setEnabled(is_dirty)
+        if is_dirty:
+            self.save_btn.setToolTip("Unsaved changes")
+        else:
+            self.save_btn.setToolTip("No changes to save")
 
 
     def set_members(self, members: list):
@@ -1257,7 +1448,34 @@ class StoryEditPanel(QFrame):
         self.desc_edit.setPlainText(plain)
 
         self.comment_edit.clear()
-        self.save_btn.setEnabled(True)
+
+        # Populate comment history from already-fetched data (no extra API call)
+        comments_data = fields.get("comment", {})
+        if isinstance(comments_data, dict):
+            all_comments = comments_data.get("comments", [])
+        else:
+            all_comments = []
+        recent = all_comments[-5:]  # show up to 5 most recent
+        if recent:
+            lines = []
+            for c in reversed(recent):
+                author = (c.get("author") or {})
+                name = author.get("displayName") or author.get("name") or "Unknown"
+                created = (c.get("created") or "")[:10]
+                body = c.get("body") or {}
+                text = self._adf_to_text(body) if isinstance(body, dict) else str(body)
+                text = text.strip().replace("\n", " ")
+                if len(text) > 200:
+                    text = text[:200] + "…"
+                lines.append(f"[{created}] {name}: {text}")
+            self.comment_history.setPlainText("\n\n".join(lines))
+        else:
+            self.comment_history.setPlainText("")
+
+        # Capture baseline snapshot so Save only enables when something actually changes
+        self._snapshot = self._snapshot_state()
+        self.save_btn.setEnabled(False)
+        self.save_btn.setToolTip("No changes to save")
 
     def _adf_to_text(self, node: dict) -> str:
         if not node:
@@ -1337,7 +1555,26 @@ class MainWindow(QMainWindow):
         self._workers = []
 
         self._build_ui()
+        self._settings = self._load_settings()
         self._status("Ready — configure connection to get started.")
+
+        # Auto-connect if credentials exist
+        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+        url   = self._settings.get("sentinel_url") if mode == JiraClient.MODE_SENTINEL else self._settings.get("acyd_url")
+        token = self._settings.get("sentinel_token") if mode == JiraClient.MODE_SENTINEL else self._settings.get("acyd_token")
+        if url and token:
+            self._settings["url"]   = url
+            self._settings["token"] = token
+            self._client = JiraClient(url, token, mode)
+            self.edit_panel._sp_field = self._client.story_point_field_id
+            self.edit_panel._fl_field = self._client.feature_link_field_id
+            mode_label = "SENTINEL" if mode == JiraClient.MODE_SENTINEL else "ACYD"
+            self.mode_indicator.setText(f"◈  {mode_label}")
+            self.refresh_btn.setEnabled(True)
+            self.switch_instance_btn.setEnabled(True)
+            self._load_projects()
+
+        self._check_token_expiry()
 
     # ── Build ─────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -1365,6 +1602,13 @@ class MainWindow(QMainWindow):
             f"color: {ACCENT_BLUE}; font-size: 11px; letter-spacing: 2px; padding: 0 12px;"
         )
         tb_layout.addWidget(self.mode_indicator)
+
+        self.switch_instance_btn = QPushButton("⇄  Switch Instance")
+        self.switch_instance_btn.setObjectName("toolbar_btn")
+        self.switch_instance_btn.setEnabled(False)
+        self.switch_instance_btn.setToolTip("Switch between Sentinel and ACyD without opening settings")
+        self.switch_instance_btn.clicked.connect(self._switch_instance)
+        tb_layout.addWidget(self.switch_instance_btn)
 
         self.connect_btn = QPushButton("⚙  Configure")
         self.connect_btn.setObjectName("toolbar_btn")
@@ -1450,7 +1694,7 @@ class MainWindow(QMainWindow):
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Filter stories…")
-        self.search_edit.setMinimumWidth(200)
+        #self.search_edit.setMinimumWidth(200)
         self.search_edit.textChanged.connect(self._filter_table)
         fb_layout.addWidget(self.search_edit)
 
@@ -1511,6 +1755,72 @@ class MainWindow(QMainWindow):
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        version_lbl = QLabel(f"◈  v{APP_VERSION}")
+        version_lbl.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 11px; letter-spacing: 1px; padding: 0 12px;"
+        )
+        self.status_bar.addPermanentWidget(version_lbl)
+
+    # ── Persist settings ──────────────────────────────────────────────────────
+    @staticmethod
+    def _encode_token(token: str) -> str:
+        return base64.b64encode(token.encode()).decode() if token else ""
+
+    @staticmethod
+    def _decode_token(encoded: str) -> str:
+        try:
+            return base64.b64decode(encoded.encode()).decode() if encoded else ""
+        except Exception:
+            return ""
+
+    def _save_settings(self):
+        qs = QSettings("SprintMate", "SprintMate")
+        s  = self._settings
+        qs.setValue("mode",                     s.get("mode", ""))
+        qs.setValue("sentinel_url",             s.get("sentinel_url", ""))
+        qs.setValue("sentinel_token",           self._encode_token(s.get("sentinel_token", "")))
+        qs.setValue("sentinel_token_expiry",    s.get("sentinel_token_expiry", ""))
+        qs.setValue("sentinel_default_project", s.get("sentinel_default_project", ""))
+        qs.setValue("sentinel_default_board",   s.get("sentinel_default_board", ""))
+        qs.setValue("acyd_url",                 s.get("acyd_url", ""))
+        qs.setValue("acyd_token",               self._encode_token(s.get("acyd_token", "")))
+        qs.setValue("acyd_token_expiry",        s.get("acyd_token_expiry", ""))
+        qs.setValue("acyd_default_project",     s.get("acyd_default_project", ""))
+        qs.setValue("acyd_default_board",       s.get("acyd_default_board", ""))
+
+    def _load_settings(self) -> dict:
+        qs = QSettings("SprintMate", "SprintMate")
+        return {
+            "mode":                     qs.value("mode", JiraClient.MODE_SENTINEL),
+            "sentinel_url":             qs.value("sentinel_url", ""),
+            "sentinel_token":           self._decode_token(qs.value("sentinel_token", "")),
+            "sentinel_token_expiry":    qs.value("sentinel_token_expiry", ""),
+            "sentinel_default_project": qs.value("sentinel_default_project", ""),
+            "sentinel_default_board":   qs.value("sentinel_default_board", ""),
+            "acyd_url":                 qs.value("acyd_url", ""),
+            "acyd_token":               self._decode_token(qs.value("acyd_token", "")),
+            "acyd_token_expiry":        qs.value("acyd_token_expiry", ""),
+            "acyd_default_project":     qs.value("acyd_default_project", ""),
+            "acyd_default_board":       qs.value("acyd_default_board", ""),
+        }
+
+    def _check_token_expiry(self):
+        warnings = []
+        for instance, key in [("Sentinel", "sentinel_token_expiry"), ("ACyD", "acyd_token_expiry")]:
+            expiry_str = self._settings.get(key, "")
+            if not expiry_str:
+                continue
+            try:
+                expiry    = date.fromisoformat(expiry_str)
+                days_left = (expiry - date.today()).days
+                if days_left < 0:
+                    warnings.append(f"⚠  {instance} token has EXPIRED — please regenerate it.")
+                elif days_left <= 14:
+                    warnings.append(f"⚠  {instance} token expires in {days_left} day(s).")
+            except ValueError:
+                pass
+        if warnings:
+            self._status("  |  ".join(warnings))
 
     # ── Settings ──────────────────────────────────────────────────────────────
     def _open_settings(self):
@@ -1529,7 +1839,43 @@ class MainWindow(QMainWindow):
             self._sp_field = self._client.story_point_field_id
             self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
+            self.switch_instance_btn.setEnabled(True)
+            self._save_settings()
+            self._check_token_expiry()
             self._load_projects()
+
+    # ── Switch instance (topbar shortcut) ────────────────────────────────────
+    def _switch_instance(self):
+        """Toggle between Sentinel and ACyD without opening the settings dialog."""
+        if not self._settings:
+            return
+        current_mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+        new_mode = JiraClient.MODE_ACYD if current_mode == JiraClient.MODE_SENTINEL else JiraClient.MODE_SENTINEL
+
+        new_url   = self._settings.get("acyd_url")     if new_mode == JiraClient.MODE_ACYD else self._settings.get("sentinel_url")
+        new_token = self._settings.get("acyd_token")   if new_mode == JiraClient.MODE_ACYD else self._settings.get("sentinel_token")
+
+        if not new_url or not new_token:
+            QMessageBox.warning(
+                self, "Instance Not Configured",
+                f"No credentials saved for {new_mode}.\nOpen ⚙ Configure to set them up."
+            )
+            return
+
+        self._settings["mode"]  = new_mode
+        self._settings["url"]   = new_url
+        self._settings["token"] = new_token
+        self._client = JiraClient(new_url, new_token, new_mode)
+        self.edit_panel._sp_field = self._client.story_point_field_id
+        self.edit_panel._fl_field = self._client.feature_link_field_id
+        self._sp_field = self._client.story_point_field_id
+
+        mode_label = "SENTINEL" if new_mode == JiraClient.MODE_SENTINEL else "ACYD"
+        self.mode_indicator.setText(f"◈  {mode_label}")
+        self._save_settings()
+        self._check_token_expiry()
+        self._status(f"Switched to {mode_label} — reloading projects…")
+        self._load_projects()
 
     # ── Loading helpers ───────────────────────────────────────────────────────
     def _busy(self, on: bool):
@@ -1644,11 +1990,13 @@ class MainWindow(QMainWindow):
         self._status(f"Loaded {len(sprints)} sprints.")
         self.edit_panel.set_sprints(sprints)
 
-    def _load_sprint_issues(self):
+    def _load_sprint_issues(self, reselect_key: str = None):
         bid = self.board_combo.currentData()
         sid = self.sprint_combo.currentData()
         if bid is None or sid is None or not self._client:
             return
+        # Remember which row was active so we can restore it after reload
+        self._reselect_key = reselect_key or self.edit_panel.current_key
         self._busy(True)
         self._status("Loading stories…")
         self._spawn(
@@ -1664,6 +2012,16 @@ class MainWindow(QMainWindow):
         self.story_count_lbl.setText(f"{len(issues)} stories")
         self.new_story_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
+        # Re-select the previously active row if we have one
+        reselect = getattr(self, "_reselect_key", None)
+        if reselect:
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 0)
+                if item and item.text() == reselect:
+                    self.table.selectRow(row)
+                    self.table.scrollToItem(item)
+                    break
+            self._reselect_key = None
 
     def _populate_table(self, issues):
         self.table.setRowCount(0)
@@ -1754,26 +2112,27 @@ class MainWindow(QMainWindow):
         parsed = self._parse_comments_file(raw)
         if not parsed:
             QMessageBox.warning(self, "No Entries Found",
-                "No valid entries found in the file.\n\nExpected format:\nMDT-123: Your comment text here")
+                "No valid entries found in the file.\n\n"
+                "Expected format:\n"
+                "MDT-123 - Task Summary - Assignee Name: Your comment here")
             return
 
-        # Build set of loaded keys and a summary+assignee lookup
+        # Build story_info from the loaded sprint table
         loaded_keys = set()
-        # {key: (summary, assignee_display_name)}
-        story_info = {}
+        story_info  = {}  # {key: (summary, assignee)}
         for row in range(self.table.rowCount()):
-            key_item     = self.table.item(row, 0)
-            summary_item = self.table.item(row, 1)
-            assignee_item= self.table.item(row, 2)
+            key_item      = self.table.item(row, 0)
+            summary_item  = self.table.item(row, 1)
+            assignee_item = self.table.item(row, 2)
             if key_item:
                 k = key_item.text()
                 loaded_keys.add(k)
                 story_info[k] = (
-                    summary_item.text() if summary_item else "",
+                    summary_item.text()  if summary_item  else "",
                     assignee_item.text() if assignee_item else "",
                 )
 
-        # Build other instance client if settings available
+        # Build other-instance client if settings available
         other_client = None
         s = self._settings
         active_mode = s.get("mode", JiraClient.MODE_SENTINEL)
@@ -1782,72 +2141,143 @@ class MainWindow(QMainWindow):
         elif active_mode == JiraClient.MODE_ACYD and s.get("sentinel_url") and s.get("sentinel_token"):
             other_client = JiraClient(s["sentinel_url"], s["sentinel_token"], JiraClient.MODE_SENTINEL)
 
-        # Find cross-instance matches by summary + assignee
+        # Cross-instance matching by summary + assignee from the file itself.
+        # Uses fuzzy contains-search (summary ~ "...") to tolerate minor casing/
+        # punctuation differences. Falls back to exact match only when the contains
+        # search returns nothing.
         # cross_map: {active_key: other_instance_key}
         cross_map = {}
         if other_client:
-            for key, comment in parsed.items():
-                if key not in story_info:
+            for key, entry in parsed.items():
+                file_summary  = (entry["summary"] or "").strip()
+                file_assignee = (entry["assignee"] or "").strip()
+                if not file_summary:
                     continue
-                summary, assignee = story_info[key]
-                if not summary:
-                    continue
-                # Escape quotes in JQL
-                safe_summary = summary.replace('"', '\\"')
-                jql = f'summary = "{safe_summary}"'
-                if assignee and assignee != "—":
-                    safe_assignee = assignee.replace('"', '\\"')
+
+                def _best_match(candidates, target_summary, target_assignee):
+                    """Return the best-matching issue key, preferring assignee match."""
+                    target_summary_lc   = target_summary.lower()
+                    target_assignee_lc  = target_assignee.lower()
+                    scored = []
+                    for c in candidates:
+                        cf = c.get("fields", {})
+                        csum  = (cf.get("summary") or "").lower()
+                        cassignee = ((cf.get("assignee") or {}).get("displayName") or
+                                     (cf.get("assignee") or {}).get("name") or "").lower()
+                        score = 0
+                        if csum == target_summary_lc:
+                            score += 2
+                        elif target_summary_lc in csum or csum in target_summary_lc:
+                            score += 1
+                        if target_assignee_lc and target_assignee_lc in cassignee:
+                            score += 1
+                        scored.append((score, c["key"]))
+                    scored.sort(key=lambda x: -x[0])
+                    return scored[0][1] if scored and scored[0][0] > 0 else None
+
+                # Try fuzzy contains-search first
+                safe_summary = file_summary.replace('"', '\\"')
+                jql = f'summary ~ "{safe_summary}"'
+                if file_assignee:
+                    safe_assignee = file_assignee.replace('"', '\\"')
                     jql += f' AND assignee = "{safe_assignee}"'
                 matches = other_client.search_issues_jql(jql, fields="summary,assignee")
+
+                # Fall back to exact match if contains search returned nothing
+                if not matches:
+                    jql_exact = f'summary = "{safe_summary}"'
+                    matches = other_client.search_issues_jql(jql_exact, fields="summary,assignee")
+
                 if matches:
-                    cross_map[key] = matches[0]["key"]
+                    best = _best_match(matches, file_summary, file_assignee)
+                    if best:
+                        cross_map[key] = best
 
         cross_keys = set(cross_map.keys())
-        dlg = ImportCommentsDialog(parsed, loaded_keys, cross_keys, cross_map, self)
+        dlg = ImportCommentsDialog(parsed, loaded_keys, story_info, cross_keys, cross_map, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             to_post = dlg.get_comments()
             if to_post:
-                self._busy(True)
-                n = len(to_post)
+                n  = len(to_post)
                 nc = len({k for k in to_post if k in cross_keys})
+                self._busy(True)
+                # Switch progress bar to bounded mode so we see per-comment progress
+                self.progress.setRange(0, n)
+                self.progress.setValue(0)
                 self._status(f"Posting {n} comments ({nc} to both instances)…")
+
+                def _on_progress(done, total):
+                    self.progress.setValue(done)
+                    self._status(f"Posting comments… {done}/{total}")
+
+                def _on_done(result):
+                    self.progress.setRange(0, 0)   # back to indeterminate
+                    self._busy(False)
+                    posted   = result.get("posted", n)          if isinstance(result, dict) else n
+                    failures = result.get("cross_failures", []) if isinstance(result, dict) else []
+                    msg = f"✓ Posted {posted} comment{'s' if posted != 1 else ''} successfully."
+                    if failures:
+                        msg += f"  ⚠ {len(failures)} cross-post failure(s)"
+                    self._status(msg)
+
                 self._spawn(
-                    self._post_imported_comments, to_post, cross_map, other_client,
-                    on_result=lambda _: (
-                        self._busy(False),
-                        self._status(f"✓ Posted {n} comments successfully.")
-                    )
+                    self._post_imported_comments, to_post, cross_map, other_client, _on_progress,
+                    on_result=_on_done,
                 )
 
     def _parse_comments_file(self, raw: str) -> dict:
-        """Parse file with format: KEY: comment text (one per line)."""
+        """
+        Parse file with format:
+            KEY-123 - Task Summary - Assignee Name: comment text
+            KEY-123 | Task Summary | Assignee Name: comment text
+        Returns {issue_key: {"comment": str, "summary": str, "assignee": str}}
+        """
         import re
         result = {}
+        SEP = r'\s*(?:[-|~;])\s*'
         for line in raw.splitlines():
             line = line.strip()
             if not line:
                 continue
-            # Match patterns like MDT-123: comment or MDT-123 : comment
-            match = re.match(r'^([A-Z][A-Z0-9]+-\d+)\s*:\s*(.+)$', line)
+            # Accept either ' - ' or ' | ' as field separator
+            match = re.match(
+                rf'^([A-Z][A-Z0-9]+-\d+){SEP}(.+?){SEP}(.+?)\s*:\s*(.+)$',
+                line
+            )
             if match:
-                key = match.group(1).strip()
-                comment = match.group(2).strip()
+                key      = match.group(1).strip()
+                summary  = match.group(2).strip()
+                assignee = match.group(3).strip()
+                comment  = match.group(4).strip()
                 if comment:
-                    result[key] = comment
+                    result[key] = {
+                        "comment":  comment,
+                        "summary":  summary,
+                        "assignee": assignee,
+                    }
         return result
 
     def _post_imported_comments(self, comments: dict,
-                                cross_map: dict = None, other_client=None):
+                                cross_map: dict = None, other_client=None,
+                                progress_cb=None):
+        """Post comments one by one, calling progress_cb(done, total) after each."""
         cross_map = cross_map or {}
-        for key, comment in comments.items():
+        total = len(comments)
+        cross_failures = []
+        for i, (key, comment) in enumerate(comments.items(), start=1):
             self._client.add_comment(key, comment)
             if other_client and key in cross_map:
                 other_key = cross_map[key]
                 try:
                     other_client.add_comment(other_key, comment)
+                except Exception as e:
+                    cross_failures.append(f"{key} → {other_key}: {e}")
+            if progress_cb:
+                try:
+                    progress_cb(i, total)
                 except Exception:
-                    pass  # Don't fail batch if cross-post fails
-        return True
+                    pass
+        return {"posted": total, "cross_failures": cross_failures}
 
     # ── New Story ─────────────────────────────────────────────────────────────
     def _open_new_story(self):
@@ -1918,8 +2348,12 @@ class MainWindow(QMainWindow):
     def _on_saved(self, key: str):
         self._busy(False)
         self._status(f"✓ {key} updated successfully.")
-        # Refresh
-        self._load_sprint_issues()
+        # Reset dirty state so save button disables until next edit
+        self.edit_panel._snapshot = self.edit_panel._snapshot_state()
+        self.edit_panel.save_btn.setEnabled(False)
+        self.edit_panel.save_btn.setToolTip("No changes to save")
+        # Refresh and re-select the saved story
+        self._load_sprint_issues(reselect_key=key)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
