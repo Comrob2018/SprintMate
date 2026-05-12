@@ -1,21 +1,22 @@
-Then revert _on_project_changed back to using get_project_members, and revert _open_new_story to use self.edit_panel._members instead of calling search_users:
-In _on_project_changed:
+def get_project_members(self, project_key: str):
+    all_users = []
+    start = 0
+    max_results = 200
 
-self._spawn(
-    self._client.get_project_members, key,
-    on_result=lambda members: self.edit_panel.set_members(
-        sorted(members, key=lambda m: m.get("displayName", "").lower())
-    ),
-    on_error=lambda e: self._status(f"⚠ Could not load assignees (access restricted)"),
-)
+    while True:
+        url = (f"{self.base_url}/rest/api/{self.api_version}/user/search"
+               f"?username=.&maxResults={max_results}&startAt={start}")
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                batch = json.loads(resp.read().decode())
+                if not isinstance(batch, list) or not batch:
+                    break
+                all_users.extend(batch)
+                if len(batch) < max_results:
+                    break
+                start += max_results
+        except Exception:
+            break
 
-
-In _open_new_story:
-
-members = sorted(
-    self.edit_panel._members,
-    key=lambda m: m.get("displayName", "").lower()
-)
-
-
-And remove the search_users call from _open_new_story entirely. Both will now use the same project-scoped paginated list that get_project_members already fetches.​​​​​​​​​​​​​​​​
+    return all_users
