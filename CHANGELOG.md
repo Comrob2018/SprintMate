@@ -1,8 +1,35 @@
 # SprintMate Changelog
+## [2.0.0] — 2026-05-12
+
+### Bug Fixes
+
+* **`create_issue` argument order causing HTTP 400 on new story creation.** The call site in `_open_new_story` passed `issuetype_id` as the third positional argument and `description` as the fourth, but the `JiraClient.create_issue` signature expected them in the opposite order, so the description string was being sent as the issue type ID. Fixed by rewriting the signature to match the call site exactly (`summary`, `issuetype_id`, `description`, `assignee_id`, `priority`, `story_points`, `sprint_id`, `due_date`). Assignee and sprint assignment are now also handled inside `create_issue` directly, eliminating the need for separate follow-up calls.
+
+* **Default board setting overwritten with project key on every settings save.** `_save_and_accept` was reading `self.default_project_edit.text()` for both the `default_project` and `default_board` keys, so any saved board name was silently replaced with the project key on every dialog accept. Fixed by reading `self.default_board_edit.text()` for `default_board`.
+
+### Features
+
+* **Instance switch button in the topbar.** Added a `⇄ Switch Instance` button that toggles between Sentinel and ACyD without opening the settings dialog. Swaps the active `JiraClient`, updates field-map IDs on the edit panel, saves settings, checks token expiry, and triggers a full project/board/sprint reload. The button is disabled until credentials are loaded and shows a warning dialog if the target instance has no saved credentials.
+
+* **Dirty-state tracking on the story edit panel.** The Save button is now disabled when a story is first selected and only enables when at least one field has actually changed from its loaded value. `_snapshot_state()` captures a hashable dict of all editable field values when `load_issue` runs; `_check_dirty()` is connected to every input widget and compares the current state against the snapshot. After a successful save the snapshot is reset and Save disables again, preventing accidental re-posts.
+
+* **Comment history panel in the story edit panel.** Added a `RECENT COMMENTS` read-only section above the `ADD COMMENT` input that displays the five most recent comments on the selected story, showing author, date, and truncated body text. Populated directly from `fields["comment"]["comments"]`, which is already fetched as part of `get_sprint_issues` — no additional API calls required.
+
+### Improvements
+
+* **Post-save row selection preserved after sprint reload.** Previously `_on_saved` called `_load_sprint_issues()` unconditionally, which repopulated the table and cleared the selection, leaving the user at an empty edit panel after every save. `_load_sprint_issues` now accepts a `reselect_key` parameter; after `_populate_table` completes, `_on_issues_loaded` scans for that key and re-selects and scrolls to the matching row. `_on_saved` passes the saved issue key so the just-edited story is always restored.
+
+* **Per-comment progress during batch import posting.** The progress bar now switches to bounded mode (0–N) when import posting begins and advances after each comment rather than showing a static spinner for the entire batch. `_post_imported_comments` accepts a `progress_cb(done, total)` callable and calls it after each successful post. Cross-post failures are collected per-comment and surfaced in the status bar at completion rather than silently discarded.
+
+* **Fuzzy JQL matching for cross-instance comment cross-posting.** The cross-instance story lookup previously used `summary = "..."` (exact match), which silently failed on any casing difference, trailing whitespace, or minor punctuation mismatch. The query now uses `summary ~ "..."` (contains search) and scores all returned candidates by summary closeness and assignee match before selecting the best result. Falls back to an exact-match query only if the contains search returns no results.
+
+* **Version badge in the status bar.** Added a permanent `◈ v2.0.0` label pinned to the right side of the status bar via `addPermanentWidget`, keeping it visible regardless of status messages. The version is defined as a single `APP_VERSION` constant at the top of the module for easy future bumps.
+
+---
 
 ## [1.0.0] — 2026-05-12
 
-Features
+### Features
 
 * **Cross-instance comment posting via file import.** Comments imported from a file are now automatically cross-posted to the other Jira instance (Sentinel ↔ ACyD) when a story with a matching summary and assignee is found. The active instance uses the issue key directly; the other instance is matched via JQL (`summary` + `assignee`) using the values provided in the import file.
 
@@ -12,7 +39,7 @@ Features
 
 * **Flexible field separators in comment import files.** The comment file parser now accepts `|`, `~`, `;`, and `-` as field separators, allowing teams to use whichever character suits their workflow.
 
-Improvements
+### Improvements
 
 * **Extended comment file format.** Import files now carry three fields per entry — issue key, task summary, and assignee name — in addition to the comment text (e.g. `MDT-123 | Fix login bug | John Smith: comment here`). This allows cross-instance matching to be driven entirely by the file without requiring the story to be loaded in the current sprint view.
 
@@ -24,17 +51,17 @@ Improvements
 
 ---
 
-## [0.12.0] — 2026-05-12
+## [0.12.0] — 2026-05-11
 
-Improvements
+### Improvements
 
 * **Token expiry field repositioned below PAT Token.** Moved the Token Expiry `QDateEdit` row to appear immediately after the PAT Token field in the settings form, grouping all credential-related fields together for clarity.
 
 ---
 
-## [0.11.0] — 2026-05-12
+## [0.11.0] — 2026-05-11
 
-Features
+### Features
 
 * **Token expiration date per instance.** Added a `QDateEdit` field to `SettingsDialog` for both Sentinel and ACYD instances, allowing a token expiry date to be recorded alongside each PAT. Includes a Clear button that resets the date to one year from today. Expiry values are carried through `_data`, `_set_mode`, `_save_and_accept`, and `get_settings` so they round-trip correctly when switching between instances.
 
@@ -42,9 +69,9 @@ Features
 
 ---
 
-## [0.10.0] — 2026-05-12
+## [0.10.0] — 2026-05-11
 
-Features
+### Features
 
 * **Persistent settings across sessions.** Introduced `_save_settings` and `_load_settings` on `MainWindow` using `QSettings` (platform-native storage — registry on Windows, `~/.config` on Linux, `~/Library/Preferences` on macOS). Mode, URLs, default project, default board, and token expiry dates are stored in plain text; PAT tokens are base64-encoded before writing to disk to avoid casual plaintext exposure.
 
@@ -54,9 +81,9 @@ Features
 
 ---
 
-## [0.9.0] — 2026-05-12
+## [0.9.0] — 2026-05-11
 
-Bug Fixes
+### Bug Fixes
 
 * **Assignee not carrying over to story edit panel.** `_on_story_selected` was routing transition results to `_on_members_loaded`, which called `set_members` and overwrote the assignee combo with transition data. Fixed by routing directly to `set_panel.set_transitions`.
 
@@ -70,13 +97,13 @@ Bug Fixes
 
 * **New story creation failing with HTTP 400 on priority and required custom fields.** Priorities were hardcoded and not valid for all projects. Three required custom fields (Activity Type, Sub-Category, Element) were missing from the create payload. Fixed by fetching valid priorities and allowed values for each custom field from the API via `createmeta` before opening the dialog.
 
-Features
+### Features
 
 * **Token expiry warnings.** Added a Token Expiry Date field to the Settings dialog for each instance. On startup and after saving settings, `_check_token_expiry` compares the stored date against the current date and shows a warning dialog at 30, 7, and 1 day out, and a critical dialog if the token has already expired.
 
 * **Assignee lookup by name on new story creation.** Replaced the assignee dropdown in `NewStoryDialog` with a free-text input. On save, the entered name is validated against the Jira user search API via `find_user`. If no match is found the story is not created and a warning is shown. If a match is found the story is created and the user is assigned via a follow-up `update_issue` call.
 
-Improvements
+### Improvements
 
 * **Assignee list pagination.** `get_project_members` previously made a single request capped at 50 results. Replaced with a paginated loop using `startAt` and `maxResults=200` that continues fetching until a partial batch is returned, ensuring all project members are available in the assignee dropdown.
 
@@ -86,21 +113,21 @@ Improvements
 
 ---
 
-## [0.8.0] — 2026-05-12
+## [0.8.0] — 2026-05-08
 
-Features
+### Features
 
 * **Default project and board per instance.** Added Default Project and Default Board fields to the settings dialog for both Sentinel and ACYD. On connect, the app auto-selects the configured project and board, triggering the full load chain without manual scrolling.
 
-Bug Fixes
+### Bug Fixes
 
 * **401 errors on connect caused by inaccessible projects.** `_on_project_changed` was firing immediately on the first project in the list before the default selection could take effect. Changed the auto-trigger condition so it only fires when a default project is configured, preventing API calls to projects the user doesn't have access to.
 
 ---
 
-## [0.7.0] — 2026-05-12
+## [0.7.0] — 2026-05-08
 
-Bug Fixes
+### Bug Fixes
 
 * **Assignee dropdown showing workflow transitions instead of users.** `set_members` had no guard against receiving transitions data, which has a `to` key on each item. Added a check at the top of `set_members` to silently ignore any list that looks like transitions data.
 
@@ -108,15 +135,15 @@ Bug Fixes
 
 * **Assignee unassigned on save.** `_on_save` was sending `{"accountId": aid}` which Data Center rejects. Changed to `{"name": aid}` to match the DC API format.
 
-Improvements
+### Improvements
 
 * **Removed assignee filter dropdown from filter bar.** The dropdown was receiving transitions data and showing incorrect values. Removed in favour of the text search box which already filters by assignee name across all columns.
 
 ---
 
-## [0.6.0] — 2026-05-12
+## [0.6.0] — 2026-05-08
 
-Features
+### Features
 
 * **Import comments from a text or markdown file.** Added a `📄 Import Comments` button that parses a file formatted as `KEY: comment text` and posts each comment to the matching story. A preview dialog shows matched vs unmatched entries before posting.
 
@@ -126,23 +153,23 @@ Features
 
 ---
 
-## [0.5.0] — 2026-05-12
+## [0.5.0] — 2026-05-07
 
-Features
+### Features
 
 * **Per-instance custom field mapping.** Added `_FIELD_MAP` class variable to `JiraClient` with story point and feature link field IDs for each instance. Sentinel uses `customfield_10106` / `customfield_10100`, ACYD uses `customfield_10006` / `customfield_10000`. All hardcoded `customfield_10016` references replaced with dynamic lookups.
 
 * **Feature link field added to story edit panel.** Added a Feature Link text field to the Story Fields group in the edit panel. Loads and saves the correct custom field ID based on the active instance.
 
-Bug Fixes
+### Bug Fixes
 
 * **Story points field rejected on save.** `_do_save` now catches `RuntimeError` containing the story points field ID and retries the save without that field, preventing a failed save from blocking other field updates.
 
 ---
 
-## [0.4.0] — 2026-05-12
+## [0.4.0] — 2026-05-07
 
-Features
+### Features
 
 * **Sentinel and ACYD dual-instance support.** Replaced the Cloud/Data Center toggle in settings with a Sentinel/ACYD toggle. Each instance stores its own URL and PAT token independently. Switching instances saves the current fields before loading the other set. The active instance is shown in the top bar.
 
@@ -150,9 +177,9 @@ Features
 
 ---
 
-## [0.3.0] — 2026-05-12
+## [0.3.0] — 2026-05-07
 
-Features
+### Features
 
 * **New story creation.** Added `＋ New Story` button to the filter bar. Opens a dialog with summary, issue type, priority, story points, assignee, sprint, due date, and description fields. After creation the story table refreshes automatically.
 
@@ -164,15 +191,15 @@ Features
 
 * **Priority and issue type fields.** Added Priority (Highest/High/Medium/Low/Lowest) and Issue Type dropdowns to the edit panel, populated from the project's configured types on connect.
 
-Improvements
+### Improvements
 
 * **Fibonacci story points.** Replaced the free-entry spinner with a dropdown of standard Fibonacci values: 0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89.
 
 ---
 
-## [0.2.0] — 2026-05-12
+## [0.2.0] — 2026-05-07
 
-Bug Fixes
+### Bug Fixes
 
 * **HTTP 404 `No project could be found with key 'search'`.** Several API methods were passing query-string paths through `_request()`, causing Jira to interpret `search` as a project key. Fixed `get_projects`, `get_project_members`, `search_users`, and `get_priorities` to build full URLs manually, bypassing the router issue.
 
@@ -180,14 +207,14 @@ Bug Fixes
 
 * **`'dict' object is not callable`** on connect. `_FIELD_MAP` was defined as a dict but called as a function in `__init__`. Fixed by accessing it with `.get()`.
 
-Improvements
+### Improvements
 
 * **Error messages include the full URL.** All `HTTPError` handlers now include the HTTP method and URL in the error string, making it much easier to identify which API call is failing.
 
 ---
 
-## [0.1.0] — 2026-05-12
+## [0.1.0] — 2026-05-07
 
-Features
+### Features
 
 * **Initial release.** Dark-themed PyQt6 desktop app for managing Jira Data Center sprint stories. Connects via Bearer PAT token. Loads projects, boards, and sprints from the Agile API. Story table shows key, summary, assignee, story points, and status. Edit panel supports updating assignee, story points, description, and posting comments. Live text filter across all table columns.
