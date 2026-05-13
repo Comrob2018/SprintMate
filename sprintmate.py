@@ -32,7 +32,7 @@ from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QDate, QTimer, QSettings
 )
 from PyQt6.QtGui import (
-    QColor, QPalette
+    QColor, QPalette, QPixmap, QIcon
 )
 
 
@@ -1615,6 +1615,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SprintMate")
+        self.setWindowIcon(QIcon("C:\\Users\\P09816\\OneDrive - NGC\\Desktop\\Coding\\JIRA_manager\\jira.png"))
         self.setMinimumSize(1200, 760)
         self.setStyleSheet(STYLESHEET)
 
@@ -1661,8 +1662,14 @@ class MainWindow(QMainWindow):
         topbar.setFixedHeight(56)
         tb_layout = QHBoxLayout(topbar)
         tb_layout.setContentsMargins(20, 0, 20, 0)
+        
+        # Load and add image
+        image_label = QLabel()
+        pixmap = QPixmap("C:\\Users\\P09816\\OneDrive - NGC\\Desktop\\Coding\\JIRA_manager\\jira.png")  
+        image_label.setPixmap(pixmap.scaledToHeight(25))  # Adjust the size as needed
+        tb_layout.addWidget(image_label)
 
-        logo = QLabel("◈  SPRINTMATE")
+        logo = QLabel("  SPRINTMATE")
         logo.setObjectName("heading")
         logo.setStyleSheet(f"font-size: 14px; color: {ACCENT_CYAN}; letter-spacing: 3px;")
         tb_layout.addWidget(logo)
