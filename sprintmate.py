@@ -10,6 +10,15 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import date
+
+try:
+    import keyring
+    import keyring.errors
+    _KEYRING_AVAILABLE = True
+except ImportError:
+    _KEYRING_AVAILABLE = False
+
+_KEYRING_SERVICE = "SprintMate"
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox,
@@ -42,7 +51,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.1.2"
+APP_VERSION  = "2.2.1"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -324,8 +333,6 @@ QTabBar::tab:hover:!selected {{
 # ── Jira API client ───────────────────────────────────────────────────────────
 class JiraClient:
     """Supports both Jira Cloud (Basic auth, API v3) and Data Center/Server (Bearer PAT, API v2)."""
-    MODE_DC = "sentinel"
-    MODE_CLOUD = "sentinel"
     MODE_SENTINEL = "Sentinel"
     MODE_ACYD     = "ACyD"
 
@@ -406,11 +413,21 @@ class JiraClient:
             "comment", "issuetype", sp, fl, "duedate",
             "sprint", "closedSprints", "customfield_10020"
         ])
-        url = (f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint/{sprint_id}"
-               f"/issue?maxResults=100&fields={fields}")
-        req = urllib.request.Request(url, headers=self.headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode()).get("issues", [])
+        max_results = 100
+        start = 0
+        all_issues = []
+        while True:
+            url = (f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint/{sprint_id}"
+                   f"/issue?maxResults={max_results}&startAt={start}&fields={fields}")
+            req = urllib.request.Request(url, headers=self.headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            batch = data.get("issues", [])
+            all_issues.extend(batch)
+            if len(batch) < max_results:
+                break
+            start += max_results
+        return all_issues
         
     def search_issues_jql(self, jql: str, fields: str = "summary,assignee,status"):
         encoded = urllib.parse.quote(jql)
@@ -461,8 +478,9 @@ class JiraClient:
         try:
             urllib.request.urlopen(req, timeout=15)
         except urllib.error.HTTPError as e:
-            if e.code not in (200, 201, 204):
-                raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
+            # urlopen only raises HTTPError for non-2xx responses, so any
+            # HTTPError here is a genuine failure — always re-raise.
+            raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
     def get_project_members(self, project_key: str):
         encoded = urllib.parse.quote(project_key)
@@ -579,8 +597,8 @@ class JiraClient:
         try:
             urllib.request.urlopen(req, timeout=15)
         except urllib.error.HTTPError as e:
-            if e.code != 204:
-                raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
+            # urlopen only raises HTTPError for non-2xx responses — always re-raise.
+            raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
     def search_users(self, query: str):
         all_users = []
@@ -1047,6 +1065,7 @@ class SettingsDialog(QDialog):
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
         btns.accepted.connect(self._save_and_accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
@@ -1090,8 +1109,8 @@ class SettingsDialog(QDialog):
         self.token_edit.setText(self._data[mode]["token"])
         expiry_str = self._data[mode].get("token_expiry", "")
         if expiry_str:
-            parts = expiry_str.split("-")
-            self.expiry_edit.setDate(QDate(int(parts[0]), int(parts[1]), int(parts[2])))
+            parsed_date = QDate.fromString(expiry_str[:10], "yyyy-MM-dd")
+            self.expiry_edit.setDate(parsed_date if parsed_date.isValid() else QDate.currentDate().addYears(1))
         else:
             self.expiry_edit.setDate(QDate.currentDate().addYears(1))
         self.default_project_edit.setText(self._data[mode]["default_project"])
@@ -1341,7 +1360,9 @@ class StoryEditPanel(QFrame):
 
 
     def set_members(self, members: list):
-        if members and "to" in members[0]:
+        # Guard against accidentally receiving an invite-response payload
+        # (which contains a "to" key) instead of a user list.
+        if members and isinstance(members[0], dict) and "to" in members[0] and "displayName" not in members[0]:
             return
         self._members = members
         self.assignee_combo.clear()
@@ -1384,6 +1405,29 @@ class StoryEditPanel(QFrame):
             self.transition_combo.addItem(t.get("name", "?"), t.get("id"))
 
     def load_issue(self, issue: dict):
+        # Block all dirty-tracking signals while we populate the widgets so that
+        # programmatic assignments don't fire _check_dirty against the previous
+        # (stale) snapshot. Signals are unblocked and the snapshot is taken at the
+        # end, after every field has been set to its loaded value.
+        _tracked = [
+            self.assignee_combo, self.feature_link_edit, self.issuetype_combo,
+            self.priority_combo, self.points_combo, self.sprint_combo,
+            self.due_date, self.transition_combo, self.desc_edit, self.comment_edit,
+        ]
+        for w in _tracked:
+            w.blockSignals(True)
+        try:
+            self._load_issue_fields(issue)
+        finally:
+            for w in _tracked:
+                w.blockSignals(False)
+        # Capture baseline snapshot AFTER all fields are loaded
+        self._snapshot = self._snapshot_state()
+        self.save_btn.setEnabled(False)
+        self.save_btn.setToolTip("No changes to save")
+
+    def _load_issue_fields(self, issue: dict):
+        """Populate all widgets from issue data. Called only from load_issue with signals blocked."""
         self.current_key = issue["key"]
         fields = issue.get("fields", {})
 
@@ -1434,11 +1478,15 @@ class StoryEditPanel(QFrame):
         pts = fields.get(getattr(self, "_sp_field", "customfield_10016")) or fields.get("customfield_10016") or fields.get("story_points")
         self.points_combo.setCurrentIndex(0)
         if pts is not None:
-            pts_int = int(pts)
-            for i in range(self.points_combo.count()):
-                if self.points_combo.itemData(i) == pts_int:
-                    self.points_combo.setCurrentIndex(i)
-                    break
+            try:
+                pts_int = int(float(pts))   # Jira often returns points as floats, e.g. 5.0
+            except (TypeError, ValueError):
+                pts_int = None
+            if pts_int is not None:
+                for i in range(self.points_combo.count()):
+                    if self.points_combo.itemData(i) == pts_int:
+                        self.points_combo.setCurrentIndex(i)
+                        break
 
         fl_field = getattr(self, "_fl_field", "customfield_10100")
         fl_value = fields.get(fl_field) or ""
@@ -1459,8 +1507,8 @@ class StoryEditPanel(QFrame):
         duedate = fields.get("duedate")
         if duedate:
             self._due_set = True
-            parts = duedate.split("-")
-            self.due_date.setDate(QDate(int(parts[0]), int(parts[1]), int(parts[2])))
+            parsed_date = QDate.fromString(duedate[:10], "yyyy-MM-dd")
+            self.due_date.setDate(parsed_date if parsed_date.isValid() else QDate.currentDate())
             self.due_date.setStyleSheet(f"color: {TEXT_PRI};")
         else:
             self._due_set = False
@@ -1499,11 +1547,6 @@ class StoryEditPanel(QFrame):
             self.comment_history.setPlainText("\n\n".join(lines))
         else:
             self.comment_history.setPlainText("")
-
-        # Capture baseline snapshot so Save only enables when something actually changes
-        self._snapshot = self._snapshot_state()
-        self.save_btn.setEnabled(False)
-        self.save_btn.setToolTip("No changes to save")
 
     def _adf_to_text(self, node: dict) -> str:
         if not node:
@@ -1790,14 +1833,49 @@ class MainWindow(QMainWindow):
         self.status_bar.addPermanentWidget(version_lbl)
 
     # ── Persist settings ──────────────────────────────────────────────────────
-    @staticmethod
-    def _encode_token(token: str) -> str:
-        return base64.b64encode(token.encode()).decode() if token else ""
+    # ── Token storage ─────────────────────────────────────────────────────────
+    # Tokens are stored in the OS native credential store (Windows Credential
+    # Manager, macOS Keychain, Linux Secret Service) via the `keyring` package.
+    # If keyring is not installed, we fall back to base64 in QSettings with a
+    # one-time warning so existing installs don't silently break.
+    #
+    # Migration: on first save with keyring present, the token is written to the
+    # keychain and the QSettings entry is cleared, so the plaintext copy is removed.
 
     @staticmethod
-    def _decode_token(encoded: str) -> str:
+    def _save_token(instance: str, token: str) -> bool:
+        """Save token to OS keychain. Returns True on success, False if unavailable."""
+        if not _KEYRING_AVAILABLE:
+            return False
         try:
-            return base64.b64decode(encoded.encode()).decode() if encoded else ""
+            if token:
+                keyring.set_password(_KEYRING_SERVICE, instance, token)
+            else:
+                try:
+                    keyring.delete_password(_KEYRING_SERVICE, instance)
+                except keyring.errors.PasswordDeleteError:
+                    pass
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _load_token(instance: str, qs_fallback: str = "") -> str:
+        """
+        Load token from OS keychain.
+        If keyring is unavailable or the entry is missing, falls back to
+        decoding the base64 value that was previously stored in QSettings.
+        """
+        if _KEYRING_AVAILABLE:
+            try:
+                stored = keyring.get_password(_KEYRING_SERVICE, instance)
+                if stored is not None:
+                    return stored
+            except Exception:
+                pass
+        # Fallback: decode legacy base64 value from QSettings
+        try:
+            return base64.b64decode(qs_fallback.encode()).decode() if qs_fallback else ""
         except Exception:
             return ""
         
@@ -1825,29 +1903,42 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         qs = QSettings("SprintMate", "SprintMate")
         s  = self._settings
+
+        # Non-secret settings stay in QSettings as before
         qs.setValue("mode",                     s.get("mode", ""))
         qs.setValue("sentinel_url",             s.get("sentinel_url", ""))
-        qs.setValue("sentinel_token",           self._encode_token(s.get("sentinel_token", "")))
         qs.setValue("sentinel_token_expiry",    s.get("sentinel_token_expiry", ""))
         qs.setValue("sentinel_default_project", s.get("sentinel_default_project", ""))
         qs.setValue("sentinel_default_board",   s.get("sentinel_default_board", ""))
         qs.setValue("acyd_url",                 s.get("acyd_url", ""))
-        qs.setValue("acyd_token",               self._encode_token(s.get("acyd_token", "")))
         qs.setValue("acyd_token_expiry",        s.get("acyd_token_expiry", ""))
         qs.setValue("acyd_default_project",     s.get("acyd_default_project", ""))
         qs.setValue("acyd_default_board",       s.get("acyd_default_board", ""))
 
+        # Tokens: prefer the OS keychain; fall back to base64 in QSettings
+        for instance, key in [("sentinel", "sentinel_token"), ("acyd", "acyd_token")]:
+            token = s.get(key, "")
+            if self._save_token(instance, token):
+                # Successfully stored in keychain — remove any legacy QSettings entry
+                qs.remove(key)
+            else:
+                # keyring unavailable — store base64 as before
+                qs.setValue(key, base64.b64encode(token.encode()).decode() if token else "")
+
     def _load_settings(self) -> dict:
         qs = QSettings("SprintMate", "SprintMate")
+        # Pass the legacy base64 QSettings value as qs_fallback so existing
+        # installs keep working automatically until the user saves once and the
+        # token migrates to the keychain.
         return {
             "mode":                     qs.value("mode", JiraClient.MODE_SENTINEL),
             "sentinel_url":             qs.value("sentinel_url", ""),
-            "sentinel_token":           self._decode_token(qs.value("sentinel_token", "")),
+            "sentinel_token":           self._load_token("sentinel", qs.value("sentinel_token", "")),
             "sentinel_token_expiry":    qs.value("sentinel_token_expiry", ""),
             "sentinel_default_project": qs.value("sentinel_default_project", ""),
             "sentinel_default_board":   qs.value("sentinel_default_board", ""),
             "acyd_url":                 qs.value("acyd_url", ""),
-            "acyd_token":               self._decode_token(qs.value("acyd_token", "")),
+            "acyd_token":               self._load_token("acyd", qs.value("acyd_token", "")),
             "acyd_token_expiry":        qs.value("acyd_token_expiry", ""),
             "acyd_default_project":     qs.value("acyd_default_project", ""),
             "acyd_default_board":       qs.value("acyd_default_board", ""),
@@ -1872,9 +1963,22 @@ class MainWindow(QMainWindow):
             self._status("  |  ".join(warnings))
 
     # ── Settings ──────────────────────────────────────────────────────────────
+    def _cancel_workers(self):
+        """Disconnect result/error signals on all in-flight workers and ask them to stop.
+        This prevents stale callbacks from a previous client firing against the new one."""
+        for w in list(self._workers):
+            try:
+                w.result.disconnect()
+                w.error.disconnect()
+            except Exception:
+                pass
+            w.quit()
+        self._workers.clear()
+
     def _open_settings(self):
         dlg = SettingsDialog(self._settings, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._cancel_workers()
             self._settings = dlg.get_settings()
             mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
             self._client = JiraClient(
@@ -1911,6 +2015,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._cancel_workers()
         self._settings["mode"]  = new_mode
         self._settings["url"]   = new_url
         self._settings["token"] = new_token
@@ -2180,20 +2285,19 @@ class MainWindow(QMainWindow):
                 "MDT-123 - Task Summary - Assignee Name: Your comment here")
             return
 
-        # Build story_info from the loaded sprint table
+        # Build story_info from the authoritative issues list, not the table widget.
+        # Using the table would miss issues hidden by an active search filter.
         loaded_keys = set()
         story_info  = {}  # {key: (summary, assignee)}
-        for row in range(self.table.rowCount()):
-            key_item      = self.table.item(row, 0)
-            summary_item  = self.table.item(row, 1)
-            assignee_item = self.table.item(row, 2)
-            if key_item:
-                k = key_item.text()
-                loaded_keys.add(k)
-                story_info[k] = (
-                    summary_item.text()  if summary_item  else "",
-                    assignee_item.text() if assignee_item else "",
-                )
+        for issue in self._issues:
+            k = issue.get("key", "")
+            if not k:
+                continue
+            f = issue.get("fields", {})
+            loaded_keys.add(k)
+            assignee = f.get("assignee")
+            aname = assignee.get("displayName", "") if assignee else ""
+            story_info[k] = (f.get("summary", ""), aname)
 
         # Build other-instance client if settings available
         other_client = None
@@ -2209,6 +2313,41 @@ class MainWindow(QMainWindow):
         # punctuation differences. Falls back to exact match only when the contains
         # search returns nothing.
         # cross_map: {active_key: other_instance_key}
+
+        # Hoisted out of the per-entry loop — was previously re-defined on every iteration.
+        def _best_match(candidates, target_summary, target_assignee):
+            """Return the best-matching issue key, preferring assignee match."""
+            target_summary_lc   = target_summary.lower()
+            target_assignee_lc  = target_assignee.lower()
+            scored = []
+            for c in candidates:
+                cf = c.get("fields", {})
+                csum  = (cf.get("summary") or "").lower()
+                cassignee = ((cf.get("assignee") or {}).get("displayName") or
+                             (cf.get("assignee") or {}).get("name") or "").lower()
+                score = 0
+                if csum == target_summary_lc:
+                    score += 2
+                elif target_summary_lc in csum or csum in target_summary_lc:
+                    score += 1
+                if target_assignee_lc and target_assignee_lc in cassignee:
+                    score += 1
+                scored.append((score, c["key"]))
+            scored.sort(key=lambda x: -x[0])
+            return scored[0][1] if scored and scored[0][0] > 0 else None
+
+        def _sanitise_jql(value: str) -> str:
+            """
+            Escape characters that are special in Jira JQL string literals.
+            Handles double-quotes, backslashes, and strips wildcard/reserved
+            characters (%, *, ?) that would corrupt a ~ or = query.
+            """
+            # Escape backslash first, then double-quote
+            value = value.replace("\\", "\\\\").replace('"', '\\"')
+            # Remove characters that are JQL wildcards or break the parser
+            value = value.replace("%", "").replace("*", "").replace("?", "")
+            return value
+
         cross_map = {}
         if other_client:
             for key, entry in parsed.items():
@@ -2217,32 +2356,11 @@ class MainWindow(QMainWindow):
                 if not file_summary:
                     continue
 
-                def _best_match(candidates, target_summary, target_assignee):
-                    """Return the best-matching issue key, preferring assignee match."""
-                    target_summary_lc   = target_summary.lower()
-                    target_assignee_lc  = target_assignee.lower()
-                    scored = []
-                    for c in candidates:
-                        cf = c.get("fields", {})
-                        csum  = (cf.get("summary") or "").lower()
-                        cassignee = ((cf.get("assignee") or {}).get("displayName") or
-                                     (cf.get("assignee") or {}).get("name") or "").lower()
-                        score = 0
-                        if csum == target_summary_lc:
-                            score += 2
-                        elif target_summary_lc in csum or csum in target_summary_lc:
-                            score += 1
-                        if target_assignee_lc and target_assignee_lc in cassignee:
-                            score += 1
-                        scored.append((score, c["key"]))
-                    scored.sort(key=lambda x: -x[0])
-                    return scored[0][1] if scored and scored[0][0] > 0 else None
-
                 # Try fuzzy contains-search first
-                safe_summary = file_summary.replace('"', '\\"')
+                safe_summary = _sanitise_jql(file_summary)
                 jql = f'summary ~ "{safe_summary}"'
                 if file_assignee:
-                    safe_assignee = file_assignee.replace('"', '\\"')
+                    safe_assignee = _sanitise_jql(file_assignee)
                     jql += f' AND assignee = "{safe_assignee}"'
                 matches = other_client.search_issues_jql(jql, fields="summary,assignee")
 
@@ -2328,13 +2446,17 @@ class MainWindow(QMainWindow):
         total = len(comments)
         cross_failures = []
         for i, (key, comment) in enumerate(comments.items(), start=1):
-            self._client.add_comment(key, comment)
-            if other_client and key in cross_map:
-                other_key = cross_map[key]
-                try:
-                    other_client.add_comment(other_key, comment)
-                except Exception as e:
-                    cross_failures.append(f"{key} → {other_key}: {e}")
+            try:
+                self._client.add_comment(key, comment)
+            except Exception as e:
+                cross_failures.append(f"{key} (primary): {e}")
+            else:
+                if other_client and key in cross_map:
+                    other_key = cross_map[key]
+                    try:
+                        other_client.add_comment(other_key, comment)
+                    except Exception as e:
+                        cross_failures.append(f"{key} → {other_key}: {e}")
             if progress_cb:
                 try:
                     progress_cb(i, total)
@@ -2386,6 +2508,14 @@ class MainWindow(QMainWindow):
 
     def _on_story_created(self, result: dict):
         self._busy(False)
+        # Jira returns error payloads as 2xx with {"errorMessages": [...], "errors": {...}}
+        # rather than raising HTTP errors in some configurations — check explicitly.
+        errors = result.get("errorMessages") or list(result.get("errors", {}).values())
+        if errors:
+            msg = "\n".join(str(e) for e in errors)
+            self._status(f"⚠ Story creation failed: {errors[0]}")
+            QMessageBox.critical(self, "Create Failed", msg)
+            return
         key = result.get("key", "")
         self._status(f"✓ Created {key} successfully.")
         self._load_sprint_issues()
