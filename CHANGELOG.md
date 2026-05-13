@@ -1,4 +1,52 @@
 # SprintMate Changelog
+## [2.2.1] — 2026-05-13
+
+### Improvements
+
+* **Settings dialog confirm button renamed to "Save".** The OK button in the connection settings dialog now reads "Save" to better reflect its action and stay consistent with the save-oriented language used elsewhere in the app.
+
+---
+
+## [2.2.0] — 2026-05-13
+
+### Bug Fixes
+
+* **`move_to_sprint` always suppressed HTTP errors.** The `except urllib.error.HTTPError` block guarded the re-raise with `if e.code not in (200, 201, 204)`, but `urlopen` only raises `HTTPError` for non-2xx responses, so success codes can never appear there. The condition was always true, meaning every failure was silently swallowed. The guard has been removed; any `HTTPError` caught here is now unconditionally re-raised.
+
+* **`remove_user_from_role` always suppressed HTTP errors.** Same inverted guard pattern as above (`if e.code != 204`). Removed for the same reason — any `HTTPError` in this block is a genuine failure and is now always re-raised.
+
+* **Comment import batch aborted on first primary post failure.** `_post_imported_comments` called `self._client.add_comment` without a `try/except`, so a single failure raised an unhandled exception and returned no result dict, leaving the progress bar stuck and cross-failures unreported. The call is now wrapped; failures are recorded in `cross_failures` and the loop continues. Cross-posting is skipped for entries whose primary post failed.
+
+* **Story creation falsely reported success on Jira error payloads.** `_on_story_created` called `result.get("key", "")` unconditionally, so when Jira returned a 2xx error payload (`{"errorMessages": [...], "errors": {...}}`) the UI displayed "✓ Created  successfully." The result is now checked for `errorMessages` and `errors` keys before reporting success; a `QMessageBox.critical` is shown if either is present.
+
+* **`MODE_DC` and `MODE_CLOUD` class constants were both set to `"sentinel"`.** These two constants were dead scaffolding whose identical values made them indistinguishable from each other and from `MODE_SENTINEL`. Both have been removed; all instance-mode comparisons in the codebase already used `MODE_SENTINEL` and `MODE_ACYD`.
+
+### Features
+
+* **OS keychain storage for PATs via `keyring`.** Tokens are now stored in the platform-native credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) instead of base64-encoded in `QSettings`. The `keyring` package is imported with a `try/except` so the app continues to work without it, falling back to the previous base64 behaviour. On first save with `keyring` present, the token is written to the keychain and the legacy `QSettings` entry is removed, migrating existing installs automatically. Requires `pip install keyring`.
+
+### Improvements
+
+* **`get_sprint_issues` now paginates.** The previous implementation fetched a single page of 100 issues and returned silently, dropping any remainder. The method now uses the same `while True` / `startAt` pagination loop used by `get_project_members` and `search_users`, ensuring all issues in a sprint are loaded regardless of count.
+
+* **Story point values are safely coerced from floats.** Jira commonly returns story points as floats (e.g. `5.0`). `load_issue` previously called `int(pts)` directly, which raises `ValueError` on a float string. The conversion is now `int(float(pts))` wrapped in a `try/except (TypeError, ValueError)`, with a graceful fallback to leaving the combo at "— Not set —".
+
+* **Due dates parsed with `QDate.fromString` instead of manual splitting.** Both `load_issue` and `_set_mode` used `duedate.split("-")` with direct `int()` casts, which raises `IndexError` or produces an invalid `QDate` if the string is malformed (e.g. a Jira datetime with a `T`). Both sites now use `QDate.fromString(value[:10], "yyyy-MM-dd")` with an `.isValid()` check and a safe fallback.
+
+* **`set_members` guard is now explicit.** The previous check `if members and "to" in members[0]` would silently discard any member list whose first entry happened to contain a `"to"` key. The condition is tightened to `"to" in members[0] and "displayName" not in members[0]` with a comment explaining its purpose: filtering out invite-response payloads mistakenly routed to this method.
+
+* **Dirty-state signals blocked during `load_issue`.** All dirty-tracking widget signals (`currentIndexChanged`, `textChanged`, `dateChanged`, etc.) fired during `load_issue` while `self._snapshot` still held the previous issue's values, which could spuriously enable the Save button before the new baseline was captured. `load_issue` now calls `blockSignals(True)` on all tracked widgets, delegates population to a new `_load_issue_fields()` helper, then unblocks signals and captures the snapshot in a `finally` block.
+
+* **`_best_match` hoisted out of the cross-instance matching loop.** The function was re-defined on every iteration of `for key, entry in parsed.items()`, allocating a new function object each time. It is now defined once above the loop.
+
+* **JQL sanitisation covers wildcards and backslashes.** The previous implementation only escaped double-quotes in summary and assignee values before embedding them in JQL queries. The new `_sanitise_jql()` helper also escapes backslashes (which must be escaped first) and strips the JQL wildcard characters `%`, `*`, and `?`, preventing malformed or unintended queries when issue summaries contain these characters.
+
+* **In-flight workers are cancelled on instance switch and settings change.** `_switch_instance` and `_open_settings` replaced `self._client` without stopping active workers, leaving in-flight threads that would emit `result` signals back into UI slots referencing the old client. A new `_cancel_workers()` helper disconnects `result` and `error` signals from all active workers and calls `quit()` on each before the client is replaced. It is called at the start of both methods.
+
+* **Comment import uses `self._issues` as the source of truth for loaded keys.** `_import_comments` previously built `loaded_keys` by iterating table widget rows, so issues hidden by an active search filter were incorrectly treated as unmatched. The method now iterates `self._issues` directly, which always contains the full loaded set regardless of any active filter.
+
+---
+
 ## [2.1.3] — 2026-05-12
 ### Bug Fixes
 * **Both assignee lists now show all instance users including project members.** get_project_members now calls both the project-scoped user/assignable/search endpoint and the instance-wide user/search wildcard endpoint, merging and deduplicating results by username so no users are missing from either list.
