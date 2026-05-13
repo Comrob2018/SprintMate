@@ -1,4 +1,13 @@
 # SprintMate Changelog
+
+## [2.2.2] — 2026-05-13
+
+### Features
+* **Added application icon in the window title bar.** Set window icon with the image file to display alongside the native OS window title.
+* **Displayed the same image in the app banner next to the title.** Added a QLabel with the image pixmap to the top bar layout for consistent branding within the UI.
+
+---
+
 ## [2.2.1] — 2026-05-13
 
 ### Improvements
