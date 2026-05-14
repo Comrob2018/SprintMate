@@ -28,7 +28,7 @@
 
 * **Story creation falsely reported success on Jira error payloads.** `_on_story_created` called `result.get("key", "")` unconditionally, so when Jira returned a 2xx error payload (`{"errorMessages": [...], "errors": {...}}`) the UI displayed "✓ Created  successfully." The result is now checked for `errorMessages` and `errors` keys before reporting success; a `QMessageBox.critical` is shown if either is present.
 
-* **`MODE_DC` and `MODE_CLOUD` class constants were both set to `"sentinel"`.** These two constants were dead scaffolding whose identical values made them indistinguishable from each other and from `MODE_SENTINEL`. Both have been removed; all instance-mode comparisons in the codebase already used `MODE_SENTINEL` and `MODE_ACYD`.
+* **`MODE_DC` and `MODE_CLOUD` class constants were both set to `"secondary"`.** These two constants were dead scaffolding whose identical values made them indistinguishable from each other and from `MODE_SECONDARY`. Both have been removed; all instance-mode comparisons in the codebase already used `MODE_SECONDARY` and `MODE_PRIMARY`.
 
 ### Features
 
@@ -103,7 +103,7 @@
 
 ### Features
 
-* **Instance switch button in the topbar.** Added a `⇄ Switch Instance` button that toggles between Sentinel and ACyD without opening the settings dialog. Swaps the active `JiraClient`, updates field-map IDs on the edit panel, saves settings, checks token expiry, and triggers a full project/board/sprint reload. The button is disabled until credentials are loaded and shows a warning dialog if the target instance has no saved credentials.
+* **Instance switch button in the topbar.** Added a `⇄ Switch Instance` button that toggles between SECONDARY and PRIMARY without opening the settings dialog. Swaps the active `JiraClient`, updates field-map IDs on the edit panel, saves settings, checks token expiry, and triggers a full project/board/sprint reload. The button is disabled until credentials are loaded and shows a warning dialog if the target instance has no saved credentials.
 
 * **Dirty-state tracking on the story edit panel.** The Save button is now disabled when a story is first selected and only enables when at least one field has actually changed from its loaded value. `_snapshot_state()` captures a hashable dict of all editable field values when `load_issue` runs; `_check_dirty()` is connected to every input widget and compares the current state against the snapshot. After a successful save the snapshot is reset and Save disables again, preventing accidental re-posts.
 
@@ -125,7 +125,7 @@
 
 ### Features
 
-* **Cross-instance comment posting via file import.** Comments imported from a file are now automatically cross-posted to the other Jira instance (Sentinel ↔ ACyD) when a story with a matching summary and assignee is found. The active instance uses the issue key directly; the other instance is matched via JQL (`summary` + `assignee`) using the values provided in the import file.
+* **Cross-instance comment posting via file import.** Comments imported from a file are now automatically cross-posted to the other Jira instance (SECONDARY ↔ PRIMARY) when a story with a matching summary and assignee is found. The active instance uses the issue key directly; the other instance is matched via JQL (`summary` + `assignee`) using the values provided in the import file.
 
 * **Rich preview table for imported comments.** The import comments dialog now displays five columns — KEY, SUMMARY, ASSIGNEE, CROSS-POST TO, and COMMENT — giving a full picture of what will be posted and where before confirming. Cross-post targets are highlighted in cyan; unmatched entries show a dimmed dash.
 
@@ -157,7 +157,7 @@
 
 ### Features
 
-* **Token expiration date per instance.** Added a `QDateEdit` field to `SettingsDialog` for both Sentinel and ACYD instances, allowing a token expiry date to be recorded alongside each PAT. Includes a Clear button that resets the date to one year from today. Expiry values are carried through `_data`, `_set_mode`, `_save_and_accept`, and `get_settings` so they round-trip correctly when switching between instances.
+* **Token expiration date per instance.** Added a `QDateEdit` field to `SettingsDialog` for both SECONDARY and PRIMARY instances, allowing a token expiry date to be recorded alongside each PAT. Includes a Clear button that resets the date to one year from today. Expiry values are carried through `_data`, `_set_mode`, `_save_and_accept`, and `get_settings` so they round-trip correctly when switching between instances.
 
 * **Startup and post-save expiry warnings.** `MainWindow` now calls `_check_token_expiry` on launch and after every settings save. A warning is surfaced in the status bar if any token has already expired or is within 14 days of expiry.
 
@@ -185,7 +185,7 @@
 
 * **Description update returning HTTP 400.** The description field was being sent as an ADF document object, which is only valid for Jira Cloud API v3. Jira Data Center API v2 expects a plain string. Fixed by changing `fields["description"]` to the raw text string.
 
-* **Board not loading automatically when switching to ACYD.** `_on_project_changed` was only triggered in `_on_projects_loaded` when a default project key was configured. If no default was set the board combo stayed empty until the user manually changed the project. Fixed by always calling `_on_project_changed` after projects load.
+* **Board not loading automatically when switching to PRIMARY.** `_on_project_changed` was only triggered in `_on_projects_loaded` when a default project key was configured. If no default was set the board combo stayed empty until the user manually changed the project. Fixed by always calling `_on_project_changed` after projects load.
 
 * **New story creation failing with HTTP 400 invalid issue type.** The issue type combo in `NewStoryDialog` was storing the issue type name as its data instead of the ID. The API requires the ID. Fixed by changing `it.get("name")` to `it.get("id")` in the combo item data.
 
@@ -211,7 +211,7 @@
 
 ### Features
 
-* **Default project and board per instance.** Added Default Project and Default Board fields to the settings dialog for both Sentinel and ACYD. On connect, the app auto-selects the configured project and board, triggering the full load chain without manual scrolling.
+* **Default project and board per instance.** Added Default Project and Default Board fields to the settings dialog for both SECONDARY and PRIMARY. On connect, the app auto-selects the configured project and board, triggering the full load chain without manual scrolling.
 
 ### Bug Fixes
 
@@ -241,7 +241,7 @@
 
 * **Import comments from a text or markdown file.** Added a `📄 Import Comments` button that parses a file formatted as `KEY: comment text` and posts each comment to the matching story. A preview dialog shows matched vs unmatched entries before posting.
 
-* **Cross-instance comment posting.** When importing comments, the app searches the other instance (Sentinel or ACYD) for stories with the same summary and assignee. If a match is found, the comment is posted to both instances automatically. Preview dialog shows `✓ Both instances` in cyan for cross-posted entries.
+* **Cross-instance comment posting.** When importing comments, the app searches the other instance (SECONDARY or PRIMARY) for stories with the same summary and assignee. If a match is found, the comment is posted to both instances automatically. Preview dialog shows `✓ Both instances` in cyan for cross-posted entries.
 
 * **JQL issue search added to `JiraClient`.** Added `search_issues_jql` method for searching issues by JQL query, used for cross-instance story matching by summary and assignee.
 
@@ -251,7 +251,7 @@
 
 ### Features
 
-* **Per-instance custom field mapping.** Added `_FIELD_MAP` class variable to `JiraClient` with story point and feature link field IDs for each instance. Sentinel uses `customfield_10106` / `customfield_10100`, ACYD uses `customfield_10006` / `customfield_10000`. All hardcoded `customfield_10016` references replaced with dynamic lookups.
+* **Per-instance custom field mapping.** Added `_FIELD_MAP` class variable to `JiraClient` with story point and feature link field IDs for each instance. SECONDARY uses `customfield_10106` / `customfield_10100`, PRIMARY uses `customfield_10006` / `customfield_10000`. All hardcoded `customfield_10016` references replaced with dynamic lookups.
 
 * **Feature link field added to story edit panel.** Added a Feature Link text field to the Story Fields group in the edit panel. Loads and saves the correct custom field ID based on the active instance.
 
@@ -265,7 +265,7 @@
 
 ### Features
 
-* **Sentinel and ACYD dual-instance support.** Replaced the Cloud/Data Center toggle in settings with a Sentinel/ACYD toggle. Each instance stores its own URL and PAT token independently. Switching instances saves the current fields before loading the other set. The active instance is shown in the top bar.
+* **SECONDARY and PRIMARY dual-instance support.** Replaced the Cloud/Data Center toggle in settings with a SECONDARY/PRIMARY toggle. Each instance stores its own URL and PAT token independently. Switching instances saves the current fields before loading the other set. The active instance is shown in the top bar.
 
 * **Removed Cloud-specific code paths.** Both instances are Data Center so ADF comment bodies, `accountId` assignees, and API v3 references were removed. All API calls now use Bearer PAT auth and REST API v2.
 
