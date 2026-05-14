@@ -168,13 +168,13 @@ QPushButton#toolbar_btn:disabled {{
     border-color: {TEXT_DIM};
     color: {TEXT_DIM};
 }}
-QPushButton#primary {{
+QPushButton#secondary {{
     background-color: {ACCENT_BLUE};
     color: #ffffff;
     border: none;
     font-weight: bold;
 }}
-QPushButton#primary:hover {{
+QPushButton#secondary:hover {{
     background-color: #4D9FFF;
     color: #ffffff;
 }}
@@ -333,22 +333,22 @@ QTabBar::tab:hover:!selected {{
 # ── Jira API client ───────────────────────────────────────────────────────────
 class JiraClient:
     """Supports both Jira Cloud (Basic auth, API v3) and Data Center/Server (Bearer PAT, API v2)."""
+    MODE_SECONDARY = "Secondary"
     MODE_PRIMARY = "Primary"
-    MODE_SECONDARY     = "Secondary"
 
     # mappings
     _FIELD_MAP = {
-        MODE_SECONDARY : {
+        MODE_PRIMARY : {
             "story_point": "customfield_10006",
             "feature_link": "customfield_10000"
         },
-        MODE_PRIMARY : {
+        MODE_SECONDARY : {
             "story_point": "customfield_10106",
             "feature_link": "customfield_10100"
         },
     }
 
-    def __init__(self, base_url, token, mode=MODE_PRIMARY, email=""):
+    def __init__(self, base_url, token, mode=MODE_SECONDARY, email=""):
         self.api_version = "2"  # Both are Data Center
         self.mode = mode
         self.base_url = base_url.rstrip("/")
@@ -993,21 +993,21 @@ class SettingsDialog(QDialog):
             QPushButton:first-child {{ border-radius: 6px 0 0 6px; }}
             QPushButton:last-child  {{ border-radius: 0 6px 6px 0; }}
         """
-        self.primary_btn = QPushButton("◈  PRIMARY")
-        self.primary_btn.setCheckable(True)
-        self.primary_btn.setFixedHeight(34)
-        self.primary_btn.setStyleSheet(toggle_style)
-
         self.secondary_btn = QPushButton("◈  SECONDARY")
         self.secondary_btn.setCheckable(True)
         self.secondary_btn.setFixedHeight(34)
         self.secondary_btn.setStyleSheet(toggle_style)
 
-        self.primary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_PRIMARY))
-        self.secondary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SECONDARY))
+        self.primary_btn = QPushButton("◈  PRIMARY")
+        self.primary_btn.setCheckable(True)
+        self.primary_btn.setFixedHeight(34)
+        self.primary_btn.setStyleSheet(toggle_style)
 
-        mode_layout.addWidget(self.primary_btn)
+        self.secondary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SECONDARY))
+        self.primary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_PRIMARY))
+
         mode_layout.addWidget(self.secondary_btn)
+        mode_layout.addWidget(self.primary_btn)
         mode_layout.addStretch()
         layout.addLayout(mode_layout)
 
@@ -1072,30 +1072,30 @@ class SettingsDialog(QDialog):
 
         # Internal store for both instances
         self._data = {
-            JiraClient.MODE_PRIMARY: {
-                "url":           settings.get("primary_url", "https://jira.sde.sp.gc1.myngc.com/"),
-                "token":         settings.get("primary_token", ""),
-                "token_expiry":  settings.get("primary_token_expiry", ""),
-                "default_project": settings.get("primary_default_project", ""),
-                "default_board": settings.get("primary_default_board", ""),
-            },
             JiraClient.MODE_SECONDARY: {
-                "url":           settings.get("secondary_url", "https://jira.northgrum.com/"),
+                "url":           settings.get("secondary_url", "https://jira.sde.sp.gc1.myngc.com/"),
                 "token":         settings.get("secondary_token", ""),
                 "token_expiry":  settings.get("secondary_token_expiry", ""),
                 "default_project": settings.get("secondary_default_project", ""),
                 "default_board": settings.get("secondary_default_board", ""),
             },
+            JiraClient.MODE_PRIMARY: {
+                "url":           settings.get("primary_url", "https://jira.northgrum.com/"),
+                "token":         settings.get("primary_token", ""),
+                "token_expiry":  settings.get("primary_token_expiry", ""),
+                "default_project": settings.get("primary_default_project", ""),
+                "default_board": settings.get("primary_default_board", ""),
+            },
         }
-        self._set_mode(settings.get("mode", JiraClient.MODE_PRIMARY))
+        self._set_mode(settings.get("mode", JiraClient.MODE_SECONDARY))
 
     def _set_mode(self, mode: str):
         # Save current fields before switching
         if mode:
             if mode == "ACyD":
-                mode = "Secondary"
-            elif mode =="Sentinel":
                 mode = "Primary"
+            elif mode =="Sentinel":
+                mode = "Secondary"
         if hasattr(self, "_mode"):
             self._data[self._mode]["url"]   = self.url_edit.text().strip()
             self._data[self._mode]["token"] = self.token_edit.text().strip()
@@ -1104,10 +1104,10 @@ class SettingsDialog(QDialog):
             self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
 
         self._mode = mode
-        is_primary = mode == JiraClient.MODE_PRIMARY
-        self.primary_btn.setChecked(is_primary)
-        self.secondary_btn.setChecked(not is_primary)
-        self.instance_lbl.setText(f"{'PRIMARY' if is_primary else 'SECONDARY'} INSTANCE")
+        is_secondary = mode == JiraClient.MODE_SECONDARY
+        self.secondary_btn.setChecked(is_secondary)
+        self.primary_btn.setChecked(not is_secondary)
+        self.instance_lbl.setText(f"{'SECONDARY' if is_secondary else 'PRIMARY'} INSTANCE")
         # Load saved values for this instance
         self.url_edit.setText(self._data[mode]["url"])
         self.token_edit.setText(self._data[mode]["token"])
@@ -1146,19 +1146,19 @@ class SettingsDialog(QDialog):
     def get_settings(self):
         return {
             "mode":           self._mode,
-            "primary_url":   self._data[JiraClient.MODE_PRIMARY]["url"],
-            "primary_token": self._data[JiraClient.MODE_PRIMARY]["token"],
-            "primary_token_expiry": self._data[JiraClient.MODE_PRIMARY].get("token_expiry", ""),
-            "secondary_url":       self._data[JiraClient.MODE_SECONDARY]["url"],
-            "secondary_token":     self._data[JiraClient.MODE_SECONDARY]["token"],
+            "secondary_url":   self._data[JiraClient.MODE_SECONDARY]["url"],
+            "secondary_token": self._data[JiraClient.MODE_SECONDARY]["token"],
             "secondary_token_expiry": self._data[JiraClient.MODE_SECONDARY].get("token_expiry", ""),
+            "primary_url":       self._data[JiraClient.MODE_PRIMARY]["url"],
+            "primary_token":     self._data[JiraClient.MODE_PRIMARY]["token"],
+            "primary_token_expiry": self._data[JiraClient.MODE_PRIMARY].get("token_expiry", ""),
             # Active instance shortcuts
             "url":   self._data[self._mode]["url"],
             "token": self._data[self._mode]["token"],
-            "primary_default_project": self._data[JiraClient.MODE_PRIMARY]["default_project"],
-            "secondary_default_project":     self._data[JiraClient.MODE_SECONDARY]["default_project"],
-            "primary_default_board": self._data[JiraClient.MODE_PRIMARY].get("default_board", ""),
-            "secondary_default_board":     self._data[JiraClient.MODE_SECONDARY].get("default_board", ""),
+            "secondary_default_project": self._data[JiraClient.MODE_SECONDARY]["default_project"],
+            "primary_default_project":     self._data[JiraClient.MODE_PRIMARY]["default_project"],
+            "secondary_default_board": self._data[JiraClient.MODE_SECONDARY].get("default_board", ""),
+            "primary_default_board":     self._data[JiraClient.MODE_PRIMARY].get("default_board", ""),
         }
 
 
@@ -1635,16 +1635,16 @@ class MainWindow(QMainWindow):
         self._status("Ready — configure connection to get started.")
 
         # Auto-connect if credentials exist
-        mode = self._settings.get("mode", JiraClient.MODE_PRIMARY)
-        url   = self._settings.get("primary_url") if mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_url")
-        token = self._settings.get("primary_token") if mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_token")
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        url   = self._settings.get("secondary_url") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_url")
+        token = self._settings.get("secondary_token") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_token")
         if url and token:
             self._settings["url"]   = url
             self._settings["token"] = token
             self._client = JiraClient(url, token, mode)
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
-            mode_label = "Primary" if mode == JiraClient.MODE_PRIMARY else "Secondary"
+            mode_label = "Secondary" if mode == JiraClient.MODE_SECONDARY else "Primary"
             self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
             self.switch_instance_btn.setEnabled(True)
@@ -1688,7 +1688,7 @@ class MainWindow(QMainWindow):
         self.switch_instance_btn = QPushButton("⇄  Switch Instance")
         self.switch_instance_btn.setObjectName("toolbar_btn")
         self.switch_instance_btn.setEnabled(False)
-        self.switch_instance_btn.setToolTip("Switch between PRIMARY and Secondary without opening settings")
+        self.switch_instance_btn.setToolTip("Switch between SECONDARY and Primary without opening settings")
         self.switch_instance_btn.clicked.connect(self._switch_instance)
         tb_layout.addWidget(self.switch_instance_btn)
 
@@ -1917,17 +1917,17 @@ class MainWindow(QMainWindow):
 
         # Non-secret settings stay in QSettings as before
         qs.setValue("mode",                     s.get("mode", ""))
-        qs.setValue("primary_url",             s.get("primary_url", ""))
-        qs.setValue("primary_token_expiry",    s.get("primary_token_expiry", ""))
-        qs.setValue("primary_default_project", s.get("primary_default_project", ""))
-        qs.setValue("primary_default_board",   s.get("primary_default_board", ""))
-        qs.setValue("secondary_url",                 s.get("secondary_url", ""))
-        qs.setValue("secondary_token_expiry",        s.get("secondary_token_expiry", ""))
-        qs.setValue("secondary_default_project",     s.get("secondary_default_project", ""))
-        qs.setValue("secondary_default_board",       s.get("secondary_default_board", ""))
+        qs.setValue("secondary_url",             s.get("secondary_url", ""))
+        qs.setValue("secondary_token_expiry",    s.get("secondary_token_expiry", ""))
+        qs.setValue("secondary_default_project", s.get("secondary_default_project", ""))
+        qs.setValue("secondary_default_board",   s.get("secondary_default_board", ""))
+        qs.setValue("primary_url",                 s.get("primary_url", ""))
+        qs.setValue("primary_token_expiry",        s.get("primary_token_expiry", ""))
+        qs.setValue("primary_default_project",     s.get("primary_default_project", ""))
+        qs.setValue("primary_default_board",       s.get("primary_default_board", ""))
 
         # Tokens: prefer the OS keychain; fall back to base64 in QSettings
-        for instance, key in [("primary", "primary_token"), ("secondary", "secondary_token")]:
+        for instance, key in [("secondary", "secondary_token"), ("primary", "primary_token")]:
             token = s.get(key, "")
             if self._save_token(instance, token):
                 # Successfully stored in keychain — remove any legacy QSettings entry
@@ -1942,22 +1942,22 @@ class MainWindow(QMainWindow):
         # installs keep working automatically until the user saves once and the
         # token migrates to the keychain.
         return {
-            "mode":                     qs.value("mode", JiraClient.MODE_PRIMARY),
-            "primary_url":             qs.value("primary_url", ""),
-            "primary_token":           self._load_token("primary", qs.value("primary_token", "")),
-            "primary_token_expiry":    qs.value("primary_token_expiry", ""),
-            "primary_default_project": qs.value("primary_default_project", ""),
-            "primary_default_board":   qs.value("primary_default_board", ""),
-            "secondary_url":                 qs.value("secondary_url", ""),
-            "secondary_token":               self._load_token("secondary", qs.value("secondary_token", "")),
-            "secondary_token_expiry":        qs.value("secondary_token_expiry", ""),
-            "secondary_default_project":     qs.value("secondary_default_project", ""),
-            "secondary_default_board":       qs.value("secondary_default_board", ""),
+            "mode":                     qs.value("mode", JiraClient.MODE_SECONDARY),
+            "secondary_url":             qs.value("secondary_url", ""),
+            "secondary_token":           self._load_token("secondary", qs.value("secondary_token", "")),
+            "secondary_token_expiry":    qs.value("secondary_token_expiry", ""),
+            "secondary_default_project": qs.value("secondary_default_project", ""),
+            "secondary_default_board":   qs.value("secondary_default_board", ""),
+            "primary_url":                 qs.value("primary_url", ""),
+            "primary_token":               self._load_token("primary", qs.value("primary_token", "")),
+            "primary_token_expiry":        qs.value("primary_token_expiry", ""),
+            "primary_default_project":     qs.value("primary_default_project", ""),
+            "primary_default_board":       qs.value("primary_default_board", ""),
         }
 
     def _check_token_expiry(self):
         warnings = []
-        for instance, key in [("Primary", "primary_token_expiry"), ("Secondary", "secondary_token_expiry")]:
+        for instance, key in [("Secondary", "secondary_token_expiry"), ("Primary", "primary_token_expiry")]:
             expiry_str = self._settings.get(key, "")
             if not expiry_str:
                 continue
@@ -1991,13 +1991,13 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._cancel_workers()
             self._settings = dlg.get_settings()
-            mode = self._settings.get("mode", JiraClient.MODE_PRIMARY)
+            mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
             self._client = JiraClient(
                 self._settings["url"],
                 self._settings["token"],
                 mode
             )
-            mode_label = "Primary" if mode == JiraClient.MODE_PRIMARY else "Secondary"
+            mode_label = "Secondary" if mode == JiraClient.MODE_SECONDARY else "Primary"
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
             self._sp_field = self._client.story_point_field_id
@@ -2010,14 +2010,14 @@ class MainWindow(QMainWindow):
 
     # ── Switch instance (topbar shortcut) ────────────────────────────────────
     def _switch_instance(self):
-        """Toggle between Primary and Secondary without opening the settings dialog."""
+        """Toggle between Secondary and Primary without opening the settings dialog."""
         if not self._settings:
             return
-        current_mode = self._settings.get("mode", JiraClient.MODE_PRIMARY)
-        new_mode = JiraClient.MODE_SECONDARY if current_mode == JiraClient.MODE_PRIMARY else JiraClient.MODE_PRIMARY
+        current_mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        new_mode = JiraClient.MODE_PRIMARY if current_mode == JiraClient.MODE_SECONDARY else JiraClient.MODE_SECONDARY
 
-        new_url   = self._settings.get("secondary_url")     if new_mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_url")
-        new_token = self._settings.get("secondary_token")   if new_mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_token")
+        new_url   = self._settings.get("primary_url")     if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_url")
+        new_token = self._settings.get("primary_token")   if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_token")
 
         if not new_url or not new_token:
             QMessageBox.warning(
@@ -2035,7 +2035,7 @@ class MainWindow(QMainWindow):
         self.edit_panel._fl_field = self._client.feature_link_field_id
         self._sp_field = self._client.story_point_field_id
 
-        mode_label = "Primary" if new_mode == JiraClient.MODE_PRIMARY else "Secondary"
+        mode_label = "Secondary" if new_mode == JiraClient.MODE_SECONDARY else "Primary"
         self.mode_indicator.setText(f"◈  {mode_label}")
         self._save_settings()
         self._check_token_expiry()
@@ -2078,7 +2078,7 @@ class MainWindow(QMainWindow):
         self.project_combo.clear()
         for p in projects:
             self.project_combo.addItem(f"{p['key']} — {p['name']}", p["key"])
-        mode = self._settings.get("mode", JiraClient.MODE_PRIMARY)
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         default_key = self._settings.get(f"{mode}_default_project", "")
         if default_key:
             for i in range(self.project_combo.count()):
@@ -2126,7 +2126,7 @@ class MainWindow(QMainWindow):
         self.board_combo.clear()
         for b in boards:
             self.board_combo.addItem(b["name"], b["id"])
-        mode = self._settings.get("mode", JiraClient.MODE_PRIMARY)
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         default_board = self._settings.get(f"{mode}_default_board", "").lower()
         if default_board:
             for i in range(self.board_combo.count()):
@@ -2313,11 +2313,11 @@ class MainWindow(QMainWindow):
         # Build other-instance client if settings available
         other_client = None
         s = self._settings
-        active_mode = s.get("mode", JiraClient.MODE_PRIMARY)
-        if active_mode == JiraClient.MODE_PRIMARY and s.get("secondary_url") and s.get("secondary_token"):
-            other_client = JiraClient(s["secondary_url"], s["secondary_token"], JiraClient.MODE_SECONDARY)
-        elif active_mode == JiraClient.MODE_SECONDARY and s.get("primary_url") and s.get("primary_token"):
+        active_mode = s.get("mode", JiraClient.MODE_SECONDARY)
+        if active_mode == JiraClient.MODE_SECONDARY and s.get("primary_url") and s.get("primary_token"):
             other_client = JiraClient(s["primary_url"], s["primary_token"], JiraClient.MODE_PRIMARY)
+        elif active_mode == JiraClient.MODE_PRIMARY and s.get("secondary_url") and s.get("secondary_token"):
+            other_client = JiraClient(s["secondary_url"], s["secondary_token"], JiraClient.MODE_SECONDARY)
 
         # Cross-instance matching by summary + assignee from the file itself.
         # Uses fuzzy contains-search (summary ~ "...") to tolerate minor casing/
@@ -2460,7 +2460,7 @@ class MainWindow(QMainWindow):
             try:
                 self._client.add_comment(key, comment)
             except Exception as e:
-                cross_failures.append(f"{key} (primary): {e}")
+                cross_failures.append(f"{key} (secondary): {e}")
             else:
                 if other_client and key in cross_map:
                     other_key = cross_map[key]
