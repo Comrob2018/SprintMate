@@ -1091,11 +1091,6 @@ class SettingsDialog(QDialog):
 
     def _set_mode(self, mode: str):
         # Save current fields before switching
-        if mode:
-            if mode == "ACyD":
-                mode = "Primary"
-            elif mode =="Sentinel":
-                mode = "Secondary"
         if hasattr(self, "_mode"):
             self._data[self._mode]["url"]   = self.url_edit.text().strip()
             self._data[self._mode]["token"] = self.token_edit.text().strip()
