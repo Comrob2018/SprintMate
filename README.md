@@ -108,6 +108,5 @@ Progress is shown per-comment in the progress bar. Any failures are reported in 
 ## Notes
 
 - The app targets **Jira Data Center** exclusively and uses the **REST API v2** and the **Agile API v1.0** for boards and sprints.
-- Story point field IDs are mapped per instance: `customfield_10106` (Sentinel) and `customfield_10006` (ACyD).
 - All API calls run on background threads — the UI stays responsive during loads.
 - Settings (URLs, default project/board, token expiry) are stored via `QSettings` (registry on Windows, `~/.config` on Linux, `~/Library/Preferences` on macOS). PAT tokens are stored in the OS keychain when `keyring` is available.
