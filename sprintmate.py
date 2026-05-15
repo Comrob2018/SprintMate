@@ -15,7 +15,6 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import date
-import time
 
 try:
     import keyring
