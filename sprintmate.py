@@ -3091,12 +3091,21 @@ class MainWindow(QMainWindow):
             return
         key = key_item.text()
         issue = next((i for i in self._issues if i["key"] == key), None)
-        if issue:
-            self.edit_panel.load_issue(issue)
-            self._spawn(
-                self._client.get_issue_transitions, key,
-                on_result=self.edit_panel.set_transitions,
-            )
+        if not issue:
+            return
+    
+        self.edit_panel.load_issue(issue)
+        self._spawn(
+            self._client.get_issue_transitions, key,
+            on_result=self.edit_panel.set_transitions,
+        )
+        # Use the same full user search as New Story dialog
+        self._spawn(
+            self._client.search_users, "",
+            on_result=lambda members: self.edit_panel.set_members(
+                sorted(members, key=lambda m: m.get("displayName", "").lower())
+            ),
+        )
 
     # ── Export ────────────────────────────────────────────────────────────────
     def _build_export_filename(self) -> str:
