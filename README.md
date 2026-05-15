@@ -5,8 +5,19 @@ A PyQt6 desktop app for managing your team's Jira Data Center sprint stories —
 ---
 
 ## Setup
+### 1. Generate your Personal Access Token
 
-### 1. Install dependencies
+* Log in to JIRA.
+* Open Profile ▶ Personal Access Tokens (or Settings ▶ System ▶ Personal Access Tokens for admins).
+* Click Create token, give it a name, set an expiry, pick the required scopes, and Create.
+* **Copy the generated token** – you’ll see it only once. Use it as a Bearer token in the Authorization header when calling the Jira REST API.
+
+### 2. Install python
+
+* Go to the appropriate place to get the latest version of python.
+* **If using this on a company PC, you may need to get permission** 
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -14,7 +25,7 @@ pip install -r requirements.txt
 
 > **`keyring` is recommended** for secure PAT storage. If installed, tokens are stored in your OS native credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) instead of encoded in application settings. If `keyring` is not installed the app falls back to legacy storage automatically.
 
-### 2. Run the app
+### 4. Run the app
 
 ```bash
 python sprintmate.py
