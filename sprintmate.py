@@ -83,7 +83,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.3"
+APP_VERSION  = "2.11.4"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -1318,21 +1318,22 @@ class SettingsDialog(QDialog):
             QPushButton:first-child {{ border-radius: 6px 0 0 6px; }}
             QPushButton:last-child  {{ border-radius: 0 6px 6px 0; }}
         """
-        self.secondary_btn = QPushButton("◈  SECONDARY")
-        self.secondary_btn.setCheckable(True)
-        self.secondary_btn.setFixedHeight(34)
-        self.secondary_btn.setStyleSheet(toggle_style)
-
+        
         self.primary_btn = QPushButton("◈  PRIMARY")
         self.primary_btn.setCheckable(True)
         self.primary_btn.setFixedHeight(34)
         self.primary_btn.setStyleSheet(toggle_style)
 
-        self.secondary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SECONDARY))
-        self.primary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_PRIMARY))
+        self.secondary_btn = QPushButton("◈  SECONDARY")
+        self.secondary_btn.setCheckable(True)
+        self.secondary_btn.setFixedHeight(34)
+        self.secondary_btn.setStyleSheet(toggle_style)
 
-        mode_layout.addWidget(self.secondary_btn)
+        self.primary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_PRIMARY))
+        self.secondary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SECONDARY))
+
         mode_layout.addWidget(self.primary_btn)
+        mode_layout.addWidget(self.secondary_btn)
         mode_layout.addStretch()
         layout.addLayout(mode_layout)
 
@@ -1439,6 +1440,11 @@ class SettingsDialog(QDialog):
 
     def _set_mode(self, mode: str):
         # Save current fields before switching
+        if mode:
+            if mode.lower() == "ACyD".lower():
+                mode = JiraClient.MODE_PRIMARY
+            if mode.lower() == "sentinel":
+                mode = JiraClient.MODE_SECONDARY
         if hasattr(self, "_mode"):
             self._data[self._mode]["url"]   = self.url_edit.text().strip()
             self._data[self._mode]["token"] = self.token_edit.text().strip()
