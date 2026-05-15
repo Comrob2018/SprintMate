@@ -2830,9 +2830,11 @@ class MainWindow(QMainWindow):
             on_error=lambda e: self._status(f"⚠ Could not load assignees for {key} (access restricted)"),
         )
         self._spawn(
-            self._client.get_issue_types, key,
-            on_result=lambda types: self.edit_panel.set_issue_types(types),
-            on_error=lambda e: self._status(f"⚠ Could not load issue types for {key} (access restricted)"),
+            self._client.search_users, "",
+            on_result=lambda members: self.edit_panel.set_members(
+                sorted(members, key=lambda m: m.get("displayName", "").lower())
+            ),
+            on_error=lambda e: self._status(f"⚠ Could not load assignees (access restricted)"),
         )
 
 
