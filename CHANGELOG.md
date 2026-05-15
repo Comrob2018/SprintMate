@@ -1,4 +1,9 @@
 # SprintMate Changelog
+## [2.11.5] - 2026-05-15
+* **Edit panel assignee dropdown now populates using the full paginated user search** (matching New Story dialog behavior) instead of the project-scoped member list, ensuring all assignable users are available regardless of project access restrictions.​​​​​​​​​​​​​​​​
+
+---
+
 ## [2.11.4] — 2026-05-15
 ### Improvement
 * **Changed Instance layout in configuration setting menu** Primary instance is in the left position, and secondary is now on the right, also primary is first in the code and secondary is second. Putting everything in standard enlish reading order.​​
