@@ -365,22 +365,22 @@ QTabBar::tab:hover:!selected {{
 # ── Jira API client ───────────────────────────────────────────────────────────
 class JiraClient:
     """Supports both Jira Cloud (Basic auth, API v3) and Data Center/Server (Bearer PAT, API v2)."""
-    MODE_SENTINEL = "Sentinel"
-    MODE_ACYD     = "ACyD"
+    MODE_SECONDARY = "Secondary"
+    MODE_PRIMARY     = "Primary"
 
     # mappings
     _FIELD_MAP = {
-        MODE_ACYD : {
+        MODE_PRIMARY : {
             "story_point": "customfield_10006",
             "feature_link": "customfield_10000"
         },
-        MODE_SENTINEL : {
+        MODE_SECONDARY : {
             "story_point": "customfield_10106",
             "feature_link": "customfield_10100"
         },
     }
 
-    def __init__(self, base_url, token, mode=MODE_SENTINEL, email=""):
+    def __init__(self, base_url, token, mode=MODE_SECONDARY, email=""):
         self.api_version = "2"  # Both are Data Center
         self.mode = mode
         self.base_url = base_url.rstrip("/")
@@ -1318,21 +1318,21 @@ class SettingsDialog(QDialog):
             QPushButton:first-child {{ border-radius: 6px 0 0 6px; }}
             QPushButton:last-child  {{ border-radius: 0 6px 6px 0; }}
         """
-        self.sentinel_btn = QPushButton("◈  SENTINEL")
-        self.sentinel_btn.setCheckable(True)
-        self.sentinel_btn.setFixedHeight(34)
-        self.sentinel_btn.setStyleSheet(toggle_style)
+        self.secondary_btn = QPushButton("◈  SECONDARY")
+        self.secondary_btn.setCheckable(True)
+        self.secondary_btn.setFixedHeight(34)
+        self.secondary_btn.setStyleSheet(toggle_style)
 
-        self.acyd_btn = QPushButton("◈  ACYD")
-        self.acyd_btn.setCheckable(True)
-        self.acyd_btn.setFixedHeight(34)
-        self.acyd_btn.setStyleSheet(toggle_style)
+        self.primary_btn = QPushButton("◈  PRIMARY")
+        self.primary_btn.setCheckable(True)
+        self.primary_btn.setFixedHeight(34)
+        self.primary_btn.setStyleSheet(toggle_style)
 
-        self.sentinel_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SENTINEL))
-        self.acyd_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_ACYD))
+        self.secondary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_SECONDARY))
+        self.primary_btn.clicked.connect(lambda: self._set_mode(JiraClient.MODE_PRIMARY))
 
-        mode_layout.addWidget(self.sentinel_btn)
-        mode_layout.addWidget(self.acyd_btn)
+        mode_layout.addWidget(self.secondary_btn)
+        mode_layout.addWidget(self.primary_btn)
         mode_layout.addStretch()
         layout.addLayout(mode_layout)
 
@@ -1416,26 +1416,26 @@ class SettingsDialog(QDialog):
 
         # Internal store for both instances
         self._data = {
-            JiraClient.MODE_SENTINEL: {
-                "url":            settings.get("sentinel_url", "https://jira.sde.sp.gc1.myngc.com/"),
-                "token":          settings.get("sentinel_token", ""),
-                "token_expiry":   settings.get("sentinel_token_expiry", ""),
-                "default_project": settings.get("sentinel_default_project", ""),
-                "default_board":  settings.get("sentinel_default_board", ""),
-                "filter_projects": settings.get("sentinel_filter_projects", ""),
-                "filter_boards":  settings.get("sentinel_filter_boards", ""),
+            JiraClient.MODE_SECONDARY: {
+                "url":            settings.get("secondary_url", "https://jira.sde.sp.gc1.myngc.com/"),
+                "token":          settings.get("secondary_token", ""),
+                "token_expiry":   settings.get("secondary_token_expiry", ""),
+                "default_project": settings.get("secondary_default_project", ""),
+                "default_board":  settings.get("secondary_default_board", ""),
+                "filter_projects": settings.get("secondary_filter_projects", ""),
+                "filter_boards":  settings.get("secondary_filter_boards", ""),
             },
-            JiraClient.MODE_ACYD: {
-                "url":            settings.get("acyd_url", "https://jira.northgrum.com/"),
-                "token":          settings.get("acyd_token", ""),
-                "token_expiry":   settings.get("acyd_token_expiry", ""),
-                "default_project": settings.get("acyd_default_project", ""),
-                "default_board":  settings.get("acyd_default_board", ""),
-                "filter_projects": settings.get("acyd_filter_projects", ""),
-                "filter_boards":  settings.get("acyd_filter_boards", ""),
+            JiraClient.MODE_PRIMARY: {
+                "url":            settings.get("primary_url", "https://jira.northgrum.com/"),
+                "token":          settings.get("primary_token", ""),
+                "token_expiry":   settings.get("primary_token_expiry", ""),
+                "default_project": settings.get("primary_default_project", ""),
+                "default_board":  settings.get("primary_default_board", ""),
+                "filter_projects": settings.get("primary_filter_projects", ""),
+                "filter_boards":  settings.get("primary_filter_boards", ""),
             },
         }
-        self._set_mode(settings.get("mode", JiraClient.MODE_SENTINEL))
+        self._set_mode(settings.get("mode", JiraClient.MODE_SECONDARY))
 
     def _set_mode(self, mode: str):
         # Save current fields before switching
@@ -1449,10 +1449,10 @@ class SettingsDialog(QDialog):
             self._data[self._mode]["filter_boards"]   = self.filter_boards_edit.text().strip()
 
         self._mode = mode
-        is_sentinel = mode == JiraClient.MODE_SENTINEL
-        self.sentinel_btn.setChecked(is_sentinel)
-        self.acyd_btn.setChecked(not is_sentinel)
-        self.instance_lbl.setText(f"{'SENTINEL' if is_sentinel else 'ACYD'} INSTANCE")
+        is_secondary = mode == JiraClient.MODE_SECONDARY
+        self.secondary_btn.setChecked(is_secondary)
+        self.primary_btn.setChecked(not is_secondary)
+        self.instance_lbl.setText(f"{'SECONDARY' if is_secondary else 'PRIMARY'} INSTANCE")
 
         # Load saved values for this instance
         self.url_edit.setText(self._data[mode]["url"])
@@ -1502,23 +1502,23 @@ class SettingsDialog(QDialog):
     def get_settings(self):
         return {
             "mode":           self._mode,
-            "sentinel_url":   self._data[JiraClient.MODE_SENTINEL]["url"],
-            "sentinel_token": self._data[JiraClient.MODE_SENTINEL]["token"],
-            "sentinel_token_expiry": self._data[JiraClient.MODE_SENTINEL].get("token_expiry", ""),
-            "acyd_url":       self._data[JiraClient.MODE_ACYD]["url"],
-            "acyd_token":     self._data[JiraClient.MODE_ACYD]["token"],
-            "acyd_token_expiry": self._data[JiraClient.MODE_ACYD].get("token_expiry", ""),
+            "secondary_url":   self._data[JiraClient.MODE_SECONDARY]["url"],
+            "secondary_token": self._data[JiraClient.MODE_SECONDARY]["token"],
+            "secondary_token_expiry": self._data[JiraClient.MODE_SECONDARY].get("token_expiry", ""),
+            "primary_url":       self._data[JiraClient.MODE_PRIMARY]["url"],
+            "primary_token":     self._data[JiraClient.MODE_PRIMARY]["token"],
+            "primary_token_expiry": self._data[JiraClient.MODE_PRIMARY].get("token_expiry", ""),
             # Active instance shortcuts
             "url":   self._data[self._mode]["url"],
             "token": self._data[self._mode]["token"],
-            "sentinel_default_project": self._data[JiraClient.MODE_SENTINEL]["default_project"],
-            "acyd_default_project":     self._data[JiraClient.MODE_ACYD]["default_project"],
-            "sentinel_default_board": self._data[JiraClient.MODE_SENTINEL].get("default_board", ""),
-            "acyd_default_board":     self._data[JiraClient.MODE_ACYD].get("default_board", ""),
-            "sentinel_filter_projects": self._data[JiraClient.MODE_SENTINEL].get("filter_projects", ""),
-            "acyd_filter_projects":     self._data[JiraClient.MODE_ACYD].get("filter_projects", ""),
-            "sentinel_filter_boards":   self._data[JiraClient.MODE_SENTINEL].get("filter_boards", ""),
-            "acyd_filter_boards":       self._data[JiraClient.MODE_ACYD].get("filter_boards", ""),
+            "secondary_default_project": self._data[JiraClient.MODE_SECONDARY]["default_project"],
+            "primary_default_project":     self._data[JiraClient.MODE_PRIMARY]["default_project"],
+            "secondary_default_board": self._data[JiraClient.MODE_SECONDARY].get("default_board", ""),
+            "primary_default_board":     self._data[JiraClient.MODE_PRIMARY].get("default_board", ""),
+            "secondary_filter_projects": self._data[JiraClient.MODE_SECONDARY].get("filter_projects", ""),
+            "primary_filter_projects":     self._data[JiraClient.MODE_PRIMARY].get("filter_projects", ""),
+            "secondary_filter_boards":   self._data[JiraClient.MODE_SECONDARY].get("filter_boards", ""),
+            "primary_filter_boards":       self._data[JiraClient.MODE_PRIMARY].get("filter_boards", ""),
         }
 
 
@@ -2162,16 +2162,16 @@ class MainWindow(QMainWindow):
         self._status("Ready — configure connection to get started.")
 
         # Auto-connect if credentials exist
-        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
-        url   = self._settings.get("sentinel_url") if mode == JiraClient.MODE_SENTINEL else self._settings.get("acyd_url")
-        token = self._settings.get("sentinel_token") if mode == JiraClient.MODE_SENTINEL else self._settings.get("acyd_token")
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        url   = self._settings.get("secondary_url") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_url")
+        token = self._settings.get("secondary_token") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_token")
         if url and token:
             self._settings["url"]   = url
             self._settings["token"] = token
             self._client = JiraClient(url, token, mode)
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
-            mode_label = "SENTINEL" if mode == JiraClient.MODE_SENTINEL else "ACYD"
+            mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
             self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
             self.switch_instance_btn.setEnabled(True)
@@ -2209,7 +2209,7 @@ class MainWindow(QMainWindow):
         self.switch_instance_btn = QPushButton("⇄  Switch Instance")
         self.switch_instance_btn.setObjectName("toolbar_btn")
         self.switch_instance_btn.setEnabled(False)
-        self.switch_instance_btn.setToolTip("Switch between Sentinel and ACyD without opening settings")
+        self.switch_instance_btn.setToolTip("Switch between Primary and Secondary without opening settings")
         self.switch_instance_btn.clicked.connect(self._switch_instance)
         tb_layout.addWidget(self.switch_instance_btn)
 
@@ -2589,21 +2589,21 @@ class MainWindow(QMainWindow):
 
         # Non-secret settings stay in QSettings as before
         qs.setValue("mode",                       s.get("mode", ""))
-        qs.setValue("sentinel_url",               s.get("sentinel_url", ""))
-        qs.setValue("sentinel_token_expiry",      s.get("sentinel_token_expiry", ""))
-        qs.setValue("sentinel_default_project",   s.get("sentinel_default_project", ""))
-        qs.setValue("sentinel_default_board",     s.get("sentinel_default_board", ""))
-        qs.setValue("sentinel_filter_projects",   s.get("sentinel_filter_projects", ""))
-        qs.setValue("sentinel_filter_boards",     s.get("sentinel_filter_boards", ""))
-        qs.setValue("acyd_url",                   s.get("acyd_url", ""))
-        qs.setValue("acyd_token_expiry",          s.get("acyd_token_expiry", ""))
-        qs.setValue("acyd_default_project",       s.get("acyd_default_project", ""))
-        qs.setValue("acyd_default_board",         s.get("acyd_default_board", ""))
-        qs.setValue("acyd_filter_projects",       s.get("acyd_filter_projects", ""))
-        qs.setValue("acyd_filter_boards",         s.get("acyd_filter_boards", ""))
+        qs.setValue("secondary_url",               s.get("secondary_url", ""))
+        qs.setValue("secondary_token_expiry",      s.get("secondary_token_expiry", ""))
+        qs.setValue("secondary_default_project",   s.get("secondary_default_project", ""))
+        qs.setValue("secondary_default_board",     s.get("secondary_default_board", ""))
+        qs.setValue("secondary_filter_projects",   s.get("secondary_filter_projects", ""))
+        qs.setValue("secondary_filter_boards",     s.get("secondary_filter_boards", ""))
+        qs.setValue("primary_url",                   s.get("primary_url", ""))
+        qs.setValue("primary_token_expiry",          s.get("primary_token_expiry", ""))
+        qs.setValue("primary_default_project",       s.get("primary_default_project", ""))
+        qs.setValue("primary_default_board",         s.get("primary_default_board", ""))
+        qs.setValue("primary_filter_projects",       s.get("primary_filter_projects", ""))
+        qs.setValue("primary_filter_boards",         s.get("primary_filter_boards", ""))
 
         # Tokens: prefer the OS keychain; fall back to base64 in QSettings
-        for instance, key in [("sentinel", "sentinel_token"), ("acyd", "acyd_token")]:
+        for instance, key in [("secondary", "secondary_token"), ("primary", "primary_token")]:
             token = s.get(key, "")
             if self._save_token(instance, token):
                 # Successfully stored in keychain — remove any legacy QSettings entry
@@ -2618,26 +2618,26 @@ class MainWindow(QMainWindow):
         # installs keep working automatically until the user saves once and the
         # token migrates to the keychain.
         return {
-            "mode":                       qs.value("mode", JiraClient.MODE_SENTINEL),
-            "sentinel_url":               qs.value("sentinel_url", ""),
-            "sentinel_token":             self._load_token("sentinel", qs.value("sentinel_token", "")),
-            "sentinel_token_expiry":      qs.value("sentinel_token_expiry", ""),
-            "sentinel_default_project":   qs.value("sentinel_default_project", ""),
-            "sentinel_default_board":     qs.value("sentinel_default_board", ""),
-            "sentinel_filter_projects":   qs.value("sentinel_filter_projects", ""),
-            "sentinel_filter_boards":     qs.value("sentinel_filter_boards", ""),
-            "acyd_url":                   qs.value("acyd_url", ""),
-            "acyd_token":                 self._load_token("acyd", qs.value("acyd_token", "")),
-            "acyd_token_expiry":          qs.value("acyd_token_expiry", ""),
-            "acyd_default_project":       qs.value("acyd_default_project", ""),
-            "acyd_default_board":         qs.value("acyd_default_board", ""),
-            "acyd_filter_projects":       qs.value("acyd_filter_projects", ""),
-            "acyd_filter_boards":         qs.value("acyd_filter_boards", ""),
+            "mode":                       qs.value("mode", JiraClient.MODE_SECONDARY),
+            "secondary_url":               qs.value("secondary_url", ""),
+            "secondary_token":             self._load_token("secondary", qs.value("secondary_token", "")),
+            "secondary_token_expiry":      qs.value("secondary_token_expiry", ""),
+            "secondary_default_project":   qs.value("secondary_default_project", ""),
+            "secondary_default_board":     qs.value("secondary_default_board", ""),
+            "secondary_filter_projects":   qs.value("secondary_filter_projects", ""),
+            "secondary_filter_boards":     qs.value("secondary_filter_boards", ""),
+            "primary_url":                   qs.value("primary_url", ""),
+            "primary_token":                 self._load_token("primary", qs.value("primary_token", "")),
+            "primary_token_expiry":          qs.value("primary_token_expiry", ""),
+            "primary_default_project":       qs.value("primary_default_project", ""),
+            "primary_default_board":         qs.value("primary_default_board", ""),
+            "primary_filter_projects":       qs.value("primary_filter_projects", ""),
+            "primary_filter_boards":         qs.value("primary_filter_boards", ""),
         }
 
     def _check_token_expiry(self):
         warnings = []
-        for instance, key in [("Sentinel", "sentinel_token_expiry"), ("ACyD", "acyd_token_expiry")]:
+        for instance, key in [("Secondary", "secondary_token_expiry"), ("Primary", "primary_token_expiry")]:
             expiry_str = self._settings.get(key, "")
             if not expiry_str:
                 continue
@@ -2674,13 +2674,13 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._cancel_workers()
             self._settings = dlg.get_settings()
-            mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+            mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
             self._client = JiraClient(
                 self._settings["url"],
                 self._settings["token"],
                 mode
             )
-            mode_label = "SENTINEL" if mode == JiraClient.MODE_SENTINEL else "ACYD"
+            mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
             self._sp_field = self._client.story_point_field_id
@@ -2693,14 +2693,14 @@ class MainWindow(QMainWindow):
 
     # ── Switch instance (topbar shortcut) ────────────────────────────────────
     def _switch_instance(self):
-        """Toggle between Sentinel and ACyD without opening the settings dialog."""
+        """Toggle between Primary and Secondary without opening the settings dialog."""
         if not self._settings:
             return
-        current_mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
-        new_mode = JiraClient.MODE_ACYD if current_mode == JiraClient.MODE_SENTINEL else JiraClient.MODE_SENTINEL
+        current_mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        new_mode = JiraClient.MODE_PRIMARY if current_mode == JiraClient.MODE_SECONDARY else JiraClient.MODE_SECONDARY
 
-        new_url   = self._settings.get("acyd_url")     if new_mode == JiraClient.MODE_ACYD else self._settings.get("sentinel_url")
-        new_token = self._settings.get("acyd_token")   if new_mode == JiraClient.MODE_ACYD else self._settings.get("sentinel_token")
+        new_url   = self._settings.get("primary_url")     if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_url")
+        new_token = self._settings.get("primary_token")   if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_token")
 
         if not new_url or not new_token:
             QMessageBox.warning(
@@ -2718,7 +2718,7 @@ class MainWindow(QMainWindow):
         self.edit_panel._fl_field = self._client.feature_link_field_id
         self._sp_field = self._client.story_point_field_id
 
-        mode_label = "SENTINEL" if new_mode == JiraClient.MODE_SENTINEL else "ACYD"
+        mode_label = "SECONDARY" if new_mode == JiraClient.MODE_SECONDARY else "PRIMARY"
         self.mode_indicator.setText(f"◈  {mode_label}")
         self._save_settings()
         self._check_token_expiry()
@@ -2764,7 +2764,7 @@ class MainWindow(QMainWindow):
 
     def _on_projects_loaded(self, projects):
         self._busy(False)
-        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
 
         # Build filter terms for this instance (case-insensitive substring match)
         raw_filter = self._settings.get(f"{mode}_filter_projects", "").strip()
@@ -2832,7 +2832,7 @@ class MainWindow(QMainWindow):
 
     def _on_boards_loaded(self, boards):
         self._busy(False)
-        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
 
         # Build filter terms for this instance (case-insensitive substring match)
         raw_filter = self._settings.get(f"{mode}_filter_boards", "").strip()
@@ -2924,8 +2924,8 @@ class MainWindow(QMainWindow):
                 return
         # Remember which row was active so we can restore it after reload
         self._reselect_key = reselect_key or self.edit_panel.current_key
-        mode = self._settings.get("mode", JiraClient.MODE_SENTINEL)
-        mode_label = "SENTINEL" if mode == JiraClient.MODE_SENTINEL else "ACYD"
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
         sprint_label = self.sprint_combo.currentText()
         self._busy(True)
         self._status(f"Loading stories from {mode_label} — {sprint_label}…")
@@ -3271,11 +3271,11 @@ class MainWindow(QMainWindow):
         # Build other-instance client if settings available
         other_client = None
         s = self._settings
-        active_mode = s.get("mode", JiraClient.MODE_SENTINEL)
-        if active_mode == JiraClient.MODE_SENTINEL and s.get("acyd_url") and s.get("acyd_token"):
-            other_client = JiraClient(s["acyd_url"], s["acyd_token"], JiraClient.MODE_ACYD)
-        elif active_mode == JiraClient.MODE_ACYD and s.get("sentinel_url") and s.get("sentinel_token"):
-            other_client = JiraClient(s["sentinel_url"], s["sentinel_token"], JiraClient.MODE_SENTINEL)
+        active_mode = s.get("mode", JiraClient.MODE_SECONDARY)
+        if active_mode == JiraClient.MODE_SECONDARY and s.get("primary_url") and s.get("primary_token"):
+            other_client = JiraClient(s["primary_url"], s["primary_token"], JiraClient.MODE_PRIMARY)
+        elif active_mode == JiraClient.MODE_PRIMARY and s.get("secondary_url") and s.get("secondary_token"):
+            other_client = JiraClient(s["secondary_url"], s["secondary_token"], JiraClient.MODE_SECONDARY)
 
         # Cross-instance matching by summary + assignee from the file itself.
         # Uses fuzzy contains-search (summary ~ "...") to tolerate minor casing/
