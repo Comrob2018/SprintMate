@@ -1,4 +1,10 @@
 # SprintMate Changelog
+[2.11.2] — 2026-05-15
+Bug Fixes
+	•	Export dialog buttons now have descriptive labels. The export confirmation dialog previously used the generic Yes / No / Cancel buttons, making it unclear what each option would do. The buttons are now labelled All, Select, and Cancel, matching the actions they perform.​​​​​​​​​​​​​​​​
+
+---
+
 ## [2.11.1] — 2026-05-15
 
 ### Bug Fixes
