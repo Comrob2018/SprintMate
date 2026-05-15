@@ -1,7 +1,7 @@
 # SprintMate Changelog
 ## [2.11.4] — 2026-05-15
 ### Improvement
-* **Changed Instance layout in configuration setting menu** Primary instance is in the left position, and secondary is now on the left, also primary is first in the code and secondary is second. Putting everything in standard enlish reading order.​​
+* **Changed Instance layout in configuration setting menu** Primary instance is in the left position, and secondary is now on the right, also primary is first in the code and secondary is second. Putting everything in standard enlish reading order.​​
 
 ---
 
