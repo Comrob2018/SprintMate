@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.11.1
+# SprintMate  ◈  v2.11.2
 
 A PyQt6 desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, transition statuses, import bulk comments, bulk-create stories from CSV, and export sprint data, all from one panel.
 
