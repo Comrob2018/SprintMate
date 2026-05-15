@@ -83,7 +83,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.2"
+APP_VERSION  = "2.11.3"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -2764,7 +2764,7 @@ class MainWindow(QMainWindow):
 
     def _on_projects_loaded(self, projects):
         self._busy(False)
-        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
 
         # Build filter terms for this instance (case-insensitive substring match)
         raw_filter = self._settings.get(f"{mode}_filter_projects", "").strip()
@@ -2832,7 +2832,7 @@ class MainWindow(QMainWindow):
 
     def _on_boards_loaded(self, boards):
         self._busy(False)
-        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
 
         # Build filter terms for this instance (case-insensitive substring match)
         raw_filter = self._settings.get(f"{mode}_filter_boards", "").strip()
