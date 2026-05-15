@@ -90,7 +90,7 @@ Click **▶ SAVE CHANGES** (or press `Ctrl+S`) — the app updates Jira and re-s
 
 Click **＋ New Story** (or press `Ctrl+N`) in the filter bar to open the creation dialog. Fill in summary (required), issue type, priority, story points, assignee, sprint, due date, and description, then click **＋ Create Story**.
 
-The story points dropdown in the creation dialog includes the extended Fibonacci sequence: 0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89.
+The story points dropdown in the creation dialog includes the extended Fibonacci sequence: 0, 1, 3, 5, 8, 13, 21.
 
 ### Bulk-creating stories from CSV
 
