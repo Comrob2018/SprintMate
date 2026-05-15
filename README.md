@@ -8,7 +8,7 @@ A PyQt6 desktop app for managing your team's Jira Data Center sprint stories —
 ### 1. Generate your Personal Access Token
 
 * Log in to JIRA.
-* Open Profile ▶ Personal Access Tokens (or Settings ▶ System ▶ Personal Access Tokens for admins).
+* Open Profile ▶ Personal Access Tokens.
 * Click Create token, give it a name, set an expiry, pick the required scopes, and Create.
 * **Copy the generated token** – you’ll see it only once. Use it as a Bearer token in the Authorization header when calling the Jira REST API.
 
