@@ -2825,11 +2825,6 @@ class MainWindow(QMainWindow):
             on_error=lambda e: self._status(f"⚠ Could not load boards for {key} (access restricted)"),
         )
         self._spawn(
-            self._client.get_project_members, key,
-            on_result=lambda members: self.edit_panel.set_members(members),
-            on_error=lambda e: self._status(f"⚠ Could not load assignees for {key} (access restricted)"),
-        )
-        self._spawn(
             self._client.search_users, "",
             on_result=lambda members: self.edit_panel.set_members(
                 sorted(members, key=lambda m: m.get("displayName", "").lower())
