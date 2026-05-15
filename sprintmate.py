@@ -83,7 +83,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.1"
+APP_VERSION  = "2.11.2"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -3187,19 +3187,20 @@ class MainWindow(QMainWindow):
     def _export_stories(self):
         if not self._issues:
             return
-
         # Ask the user: export all or select
-        choice = QMessageBox.question(
-            self, "Export Stories",
-            f"Export all {len(self._issues)} stories, or select specific ones?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Yes,
-        )
-        # Map: Yes = Export All, No = Select, Cancel = abort
-        if choice == QMessageBox.StandardButton.Cancel:
-            return
-
-        if choice == QMessageBox.StandardButton.No:
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Export Stories")
+        msg.setText(f"Export all {len(self._issues)} stories, or select specific ones?")
+        btn_all    = msg.addButton("All",    QMessageBox.ButtonRole.YesRole)
+        btn_select = msg.addButton("Select", QMessageBox.ButtonRole.NoRole)
+        msg.addButton("Cancel",              QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(btn_all)
+        msg.exec()
+        clicked = msg.clickedButton()
+        # Map: All = export everything, Select = open picker, Cancel = abort
+        if clicked is btn_all:
+            issues_to_export = self._issues
+        elif clicked is btn_select:
             dlg = ExportStoriesDialog(self._issues, self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
@@ -3207,7 +3208,7 @@ class MainWindow(QMainWindow):
             if not issues_to_export:
                 return
         else:
-            issues_to_export = self._issues
+            return
 
         suggested = self._build_export_filename()
         path, _ = QFileDialog.getSaveFileName(
