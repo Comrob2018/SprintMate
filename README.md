@@ -10,8 +10,8 @@ A Python desktop app for managing your team's Jira Data Center sprint stories �
 * Log in to JIRA.
 * Open Profile ▶ Personal Access Tokens.
 * Click Create token, give it a name, set an expiry, pick the required scopes, and Create.
-* **Copy the generated token** – you’ll see it only once. Use it as a Bearer token in the Authorization header when calling the Jira REST API.
-
+* **Copy the generated token** – you’ll see it only once.
+  
 ### 2. Install python
 
 * Go to the appropriate place to get the latest version of python.
