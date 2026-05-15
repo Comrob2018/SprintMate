@@ -1,4 +1,10 @@
 # SprintMate Changelog
+## [2.11.3] — 2026-05-15
+### Bug Fixes
+* **Filter Projects, Filter Boards, Default Project, and Default Board settings now work correctly.** The mode value stored in settings ("Primary" / "Secondary") is capitalised, but the settings keys are all lowercase (primary_filter_projects, secondary_default_board, etc.). Building the lookup key without lowercasing the mode produced keys like "Primary_filter_projects" which never matched anything, causing all four fields to silently fall back to empty. Fixed by calling .lower() on the mode value in _on_projects_loaded and _on_boards_loaded before using it to construct the settings key.​​​​​​​​​​​​​​​​
+
+---
+
 ## [2.11.2] — 2026-05-15
 ### Bug Fixes
 * **Export dialog buttons now have descriptive labels.** The export confirmation dialog previously used the generic Yes / No / Cancel buttons, making it unclear what each option would do. The buttons are now labelled All, Select, and Cancel, matching the actions they perform.​​​​​​​​​​​​​​​​
