@@ -1,5 +1,7 @@
 # SprintMate Changelog
 ## [2.11.5] - 2026-05-15
+### Bug Fix
+* **Removed redundant get_project_members API call on project change** — superseded by the search_users call introduced in the same update.​​​​​​​​​​​​​​​​
 ### Improvement
 * **Edit panel assignee dropdown now populates using the full paginated user search** (matching New Story dialog behavior) instead of the project-scoped member list, ensuring all assignable users are available regardless of project access restrictions.​​​​​​​​​​​​​​​​
 
