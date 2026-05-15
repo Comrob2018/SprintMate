@@ -2168,7 +2168,7 @@ class MainWindow(QMainWindow):
         self._status("Ready — configure connection to get started.")
 
         # Auto-connect if credentials exist
-        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         url   = self._settings.get("secondary_url") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_url")
         token = self._settings.get("secondary_token") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_token")
         if url and token:
@@ -2680,7 +2680,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._cancel_workers()
             self._settings = dlg.get_settings()
-            mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
+            mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
             self._client = JiraClient(
                 self._settings["url"],
                 self._settings["token"],
@@ -2702,7 +2702,7 @@ class MainWindow(QMainWindow):
         """Toggle between Primary and Secondary without opening the settings dialog."""
         if not self._settings:
             return
-        current_mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
+        current_mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         new_mode = JiraClient.MODE_PRIMARY if current_mode == JiraClient.MODE_SECONDARY else JiraClient.MODE_SECONDARY
 
         new_url   = self._settings.get("primary_url")     if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_url")
@@ -2930,7 +2930,7 @@ class MainWindow(QMainWindow):
                 return
         # Remember which row was active so we can restore it after reload
         self._reselect_key = reselect_key or self.edit_panel.current_key
-        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
+        mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
         sprint_label = self.sprint_combo.currentText()
         self._busy(True)
