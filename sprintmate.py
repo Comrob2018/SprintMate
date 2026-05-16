@@ -83,7 +83,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.6"
+APP_VERSION  = "2.11.5"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
