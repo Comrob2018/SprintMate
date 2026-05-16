@@ -4,6 +4,7 @@
 * **Removed redundant get_project_members API call on project change** — superseded by the search_users call introduced in the same update.​​​​​​​​​​​​​​​​
 ### Improvement
 * **Edit panel assignee dropdown now populates using the full paginated user search** (matching New Story dialog behavior) instead of the project-scoped member list, ensuring all assignable users are available regardless of project access restrictions.​​​​​​​​​​​​​​​​
+* **Story points 13 and 21 are now highlighted** in amber with a “consider splitting” label in the edit panel dropdown, nudging teams toward smaller stories without blocking selection.
 
 ---
 
