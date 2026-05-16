@@ -1,4 +1,18 @@
 # SprintMate Changelog
+## [2.11.6] — 2026-05-16
+### Bug Fixes
+* **Story points silently dropped on save.** If Jira rejected the story points field, the app would retry without them and report success — the user had no indication their points weren’t saved. Now surfaces a warning dialog explaining which fields were and weren’t saved.
+* **Assignee dropdown cleared on empty user fetch.** If search_users returned an empty list due to a permissions issue or network hiccup, set_members would wipe the existing dropdown. The existing member list is now preserved as a fallback when the result is empty.
+### Features
+* **Open in Jira button added to the edit panel.** A new button in the story header opens the current issue directly in the browser using the configured Jira base URL, removing the need to manually navigate to the issue.
+### Improvements
+* **User list now cached per session. Previously, selecting any story triggered a full paginated search_users API call. The result is now cached on project load and reused for all subsequent story selections, clearing only on project or instance change.
+* **New Story dialog user fetch moved off the main thread.** The dialog previously called search_users synchronously, freezing the UI on slow networks. It now fetches users asynchronously and opens the dialog only once the fetch completes.
+* **Removed dead get_project_members method from JiraClient.** The method was made redundant in v2.11.5 when search_users was adopted everywhere, but was not removed at the time.
+* **Complex error lambdas in _on_project_changed extracted into named methods.** Inline error-handling lambdas for boards, issue types, and assignees were difficult to read and test. Replaced with _on_boards_load_error, _on_assignees_load_error, and _on_issue_types_load_error.
+
+---
+
 ## [2.11.5] - 2026-05-15
 ### Bug Fix
 * **Removed redundant get_project_members API call on project change** — superseded by the search_users call introduced in the same update.​​​​​​​​​​​​​​​​
