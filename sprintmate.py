@@ -1614,7 +1614,15 @@ class StoryEditPanel(QFrame):
         #self.points_combo.setMinimumWidth(140)
         self.points_combo.addItem("— Not set —", None)
         for v in FIBONACCI[1:]:
-            self.points_combo.addItem(str(v), v)
+            label = str(v)
+            if v in (13, 21):
+                label += "  — consider splitting"
+            item_idx = self.points_combo.count()
+            self.points_combo.addItem(label, v)
+            if v in (13, 21):
+                self.points_combo.setItemData(
+                    item_idx, QColor("#E3B341"), Qt.ItemDataRole.ForegroundRole
+                )
         form.addRow("Story Points:", self.points_combo)
 
         # Sprint
