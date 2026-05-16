@@ -760,7 +760,7 @@ class NewStoryDialog(QDialog):
         # Story points (Fibonacci)
         self.points_combo = QComboBox()
         self.points_combo.addItem("— Not set —", None)
-        for v in [0, 1, 3, 5, 8, 13, 21]:
+        for v in [0, 1, 2, 3, 5, 8, 13, 21]:
             self.points_combo.addItem(str(v), v)
         form.addRow("Story Points:", self.points_combo)
 
@@ -1609,7 +1609,7 @@ class StoryEditPanel(QFrame):
         form.addRow("Priority:", self.priority_combo)
 
         # Fibonacci story points
-        FIBONACCI = [None, 0, 1, 3, 5, 8, 13, 21]
+        FIBONACCI = [None, 0, 1, 2, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
         #self.points_combo.setMinimumWidth(140)
         self.points_combo.addItem("— Not set —", None)
