@@ -1,5 +1,3 @@
-
-
 Loose end 1: on_done lambda bug in _refresh_users_cache
 
 The problematic line in _open_new_story:
@@ -96,6 +94,3 @@ self.sprint_lbl.setText(f"{project}  ◈  {board}  ◈  {sprint}")
 Clear it in _clear_sprint_view:
 
 self.sprint_lbl.setText("")
-
-
-That covers all five. Want a changelog entry for these before moving on?
