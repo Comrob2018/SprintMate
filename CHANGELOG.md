@@ -1,4 +1,16 @@
 # SprintMate Changelog
+## [2.11.7] — 2026-05-16
+###Bug Fixes
+* **`on_done` callback in `_refresh_users_cache` evaluated eagerly.** The tuple lambda `(self._busy(False), _show_dialog(members))` caused `_busy(False)` to fire immediately rather than after the fetch completed, leaving the progress bar in an incorrect state. Replaced with a named inner function that sequences the calls correctly.
+* **"Open in Jira" button remained enabled after project or instance change.** The button was not included in the `_clear_sprint_view` reset, leaving it active with no issue loaded. Now disabled alongside all other edit panel controls on clear.
+### Features
+* **Right-click context menu added to the story table.** Right-clicking any row now offers "Open in Jira", "Copy Key", "Copy Row", and "Copy Full Issue" without requiring the story to be loaded in the edit panel first.
+* **Persistent sprint label added to the story table header.** A label now shows the currently loaded project, board, and sprint above the story list, remaining visible while working in the edit panel so context is never lost.
+### Improvements
+* **Token expiry check now runs periodically.** Previously the check only ran on startup, meaning a token could expire silently during a long session. A `QTimer` now repeats the check every 4 hours while the app is open. 
+
+---
+
 ## [2.11.6] — 2026-05-16
 ### Bug Fixes
 * **Story points silently dropped on save.** If Jira rejected the story points field, the app would retry without them and report success — the user had no indication their points weren’t saved. Now surfaces a warning dialog explaining which fields were and weren’t saved.
