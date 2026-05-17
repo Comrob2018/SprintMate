@@ -11,6 +11,7 @@ import re
 import ssl
 import time
 import base64
+import webbrowser
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -83,7 +84,7 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.5"
+APP_VERSION  = "2.11.7"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -408,8 +409,6 @@ class JiraClient:
                     try:
                         return json.loads(raw)
                     except json.JSONDecodeError:
-                        # Jira returned non-JSON (e.g. an HTML login-redirect page),
-                        # which usually means the session has expired or the URL is wrong.
                         preview = raw[:200].replace("\n", " ")
                         raise RuntimeError(
                             f"Jira returned a non-JSON response — your session may have "
@@ -417,7 +416,6 @@ class JiraClient:
                         )
             except urllib.error.HTTPError as e:
                 body_bytes = e.read().decode(errors="replace")
-                # Try to extract a structured error message from the JSON body.
                 try:
                     err_json = json.loads(body_bytes)
                     messages = err_json.get("errorMessages") or list(err_json.get("errors", {}).values())
@@ -433,7 +431,6 @@ class JiraClient:
                     f"Details: {e}"
                 )
             except (urllib.error.URLError, OSError) as e:
-                # Retry once on transient network errors (timeouts, connection resets, 503s).
                 if attempt == 0:
                     last_exc = e
                     time.sleep(1)
@@ -461,7 +458,6 @@ class JiraClient:
             return []
         except Exception:
             return []
-
 
     def get_sprints(self, board_id: int):
         url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint?state=active,future&maxResults=20"
@@ -511,7 +507,7 @@ class JiraClient:
                 break
             start += max_results
         return all_issues
-        
+
     def search_issues_jql(self, jql: str, fields: str = "summary,assignee,status"):
         encoded = urllib.parse.quote(jql)
         url = (f"{self.base_url}/rest/api/{self.api_version}/"
@@ -522,7 +518,7 @@ class JiraClient:
                 return json.loads(resp.read().decode()).get("issues", [])
         except Exception:
             return []
-        
+
     def get_issue_transitions(self, issue_key: str):
         return self._request("GET", f"issue/{issue_key}/transitions").get("transitions", [])
 
@@ -535,7 +531,7 @@ class JiraClient:
             return result.get("issueTypes", [])
         except Exception:
             return []
-        
+
     def move_to_sprint(self, issue_key: str, sprint_id: int):
         url = f"{self.base_url}/rest/agile/1.0/sprint/{sprint_id}/issue"
         body = json.dumps({"issues": [issue_key]}).encode()
@@ -543,38 +539,8 @@ class JiraClient:
         try:
             urllib.request.urlopen(req, timeout=15)
         except urllib.error.HTTPError as e:
-            # urlopen only raises HTTPError for non-2xx responses, so any
-            # HTTPError here is a genuine failure — always re-raise.
             raise RuntimeError(f"HTTP {e.code}: {e.read().decode()}")
 
-    def get_project_members(self, project_key: str):
-        encoded = urllib.parse.quote(project_key)
-        all_members = []
-        start = 0
-        max_results = 200
-
-        while True:
-            url = (f"{self.base_url}/rest/api/{self.api_version}/"
-                f"user/assignable/search?project={encoded}"
-                f"&maxResults={max_results}&startAt={start}")
-            req = urllib.request.Request(url, headers=self.headers)
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    result = json.loads(resp.read().decode())
-                    batch = result if isinstance(result, list) else []
-                    if not batch:
-                        break
-                    all_members.extend(batch)
-                    if len(batch) < max_results:
-                        break
-                    start += max_results
-            except urllib.error.HTTPError as e:
-                raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
-            except Exception:
-                break
-
-        return all_members
-        
     def update_issue(self, issue_key: str, fields: dict):
         self._request("PUT", f"issue/{issue_key}", {"fields": fields})
 
@@ -598,56 +564,35 @@ class JiraClient:
         due_date: str | None = None,
         feature_link: str | None = None,
     ) -> dict:
-        """
-        Build the payload and POST a new issue, using the dynamic field IDs
-        from the field-map instead of hard-coded ones.
-        Argument order matches the _open_new_story call site exactly.
-        """
         fields: dict = {
             "project":   {"key": project_key},
             "summary":   summary,
             "issuetype": {"id": issuetype_id},
         }
-
         if description:
             fields["description"] = description
-
-        # ---- Assignee -------------------------------------------------
         if assignee_id:
             fields["assignee"] = {"name": assignee_id}
-
-        # ---- Priority -------------------------------------------------
         if priority:
             fields["priority"] = {"name": priority}
-
-        # ---- Story points (dynamic) ----------------------------------
         if story_points is not None:
             fields[self.story_point_field_id] = story_points
-
-        # ---- Feature link (dynamic) -----------------------------------
         if feature_link is not None:
             fields[self.feature_link_field_id] = feature_link
-
-        # ---- Due date -------------------------------------------------
         if due_date:
             fields["duedate"] = due_date
-
         result = self._request("POST", "issue", {"fields": fields})
-
-        # ---- Sprint assignment (Agile API, separate call) -------------
         if sprint_id and result.get("key"):
             try:
                 self.move_to_sprint(result["key"], sprint_id)
             except Exception:
-                pass  # Story created; sprint move is best-effort
-
+                pass
         return result
 
     def search_users(self, query: str):
         all_users = []
         start = 0
         max_results = 200
-
         while True:
             encoded = urllib.parse.quote(query or ".")
             url = (f"{self.base_url}/rest/api/{self.api_version}/user/search"
@@ -664,21 +609,10 @@ class JiraClient:
                     start += max_results
             except Exception:
                 break
-
         return all_users
 
     def bulk_create_issues(self, project_key: str, rows: list[dict],
                            progress_cb=None) -> list[dict]:
-        """
-        Create multiple issues sequentially, reporting progress after each one.
-
-        Each item in `rows` is a resolved dict from BulkCreateDialog.get_valid_rows():
-            summary, issue_type_id, priority, story_points, assignee_id,
-            sprint_id, due_date, description
-
-        Returns a list of result dicts:
-            {"row": int, "summary": str, "key": str|None, "error": str|None}
-        """
         results = []
         total = len(rows)
         for i, row in enumerate(rows, start=1):
@@ -695,7 +629,6 @@ class JiraClient:
                     sprint_id=row.get("sprint_id"),
                     due_date=row.get("due_date"),
                 )
-                # Surface any Jira-side error payloads returned as 2xx
                 errors = created.get("errorMessages") or list(created.get("errors", {}).values())
                 if errors:
                     result["error"] = "; ".join(str(e) for e in errors)
@@ -710,7 +643,6 @@ class JiraClient:
                 except Exception:
                     pass
         return results
-
 
 
 # ── New Story Dialog ─────────────────────────────────────────────────────────
@@ -735,36 +667,38 @@ class NewStoryDialog(QDialog):
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Summary (required)
         self.summary_edit = QLineEdit()
         self.summary_edit.setPlaceholderText("Story summary (required)…")
         form.addRow("Summary *:", self.summary_edit)
 
-        # Issue type
         self.type_combo = QComboBox()
         for it in issue_types:
             self.type_combo.addItem(it.get("name", "?"), it.get("name"))
-        # Default to Story if present
         for i in range(self.type_combo.count()):
             if self.type_combo.itemText(i).lower() == "story":
                 self.type_combo.setCurrentIndex(i)
                 break
         form.addRow("Issue Type:", self.type_combo)
 
-        # Priority
         self.priority_combo = QComboBox()
         for p in ["Medium", "Highest", "High", "Low", "Lowest"]:
             self.priority_combo.addItem(p, p)
         form.addRow("Priority:", self.priority_combo)
 
-        # Story points (Fibonacci)
+        # Story points (Fibonacci) with amber warning for 13 and 21
+        FIBONACCI = [0, 1, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
         self.points_combo.addItem("— Not set —", None)
-        for v in [0, 1, 2, 3, 5, 8, 13, 21]:
-            self.points_combo.addItem(str(v), v)
+        for v in FIBONACCI:
+            label = str(v)
+            if v in (13, 21):
+                label += "  — consider splitting"
+            idx = self.points_combo.count()
+            self.points_combo.addItem(label, v)
+            if v in (13, 21):
+                self.points_combo.setItemData(idx, QColor("#E3B341"), Qt.ItemDataRole.ForegroundRole)
         form.addRow("Story Points:", self.points_combo)
 
-        # Assignee
         self.assignee_combo = QComboBox()
         self.assignee_combo.addItem("— Unassigned —", None)
         for m in members:
@@ -772,20 +706,17 @@ class NewStoryDialog(QDialog):
             self.assignee_combo.addItem(m.get("displayName", "?"), uid)
         form.addRow("Assignee:", self.assignee_combo)
 
-        # Sprint
         self.sprint_combo = QComboBox()
         self.sprint_combo.addItem("— Backlog (no sprint) —", None)
         for s in sprints:
             state = s.get("state", "")
             self.sprint_combo.addItem(f"[{state.upper()}] {s['name']}", s["id"])
-        # Default to active sprint if any
         for i in range(self.sprint_combo.count()):
             if "[ACTIVE]" in self.sprint_combo.itemText(i):
                 self.sprint_combo.setCurrentIndex(i)
                 break
         form.addRow("Sprint:", self.sprint_combo)
 
-        # Due date — always set, defaults to today
         self.due_date = QDateEdit()
         self.due_date.setCalendarPopup(True)
         self.due_date.setDisplayFormat("yyyy-MM-dd")
@@ -794,7 +725,6 @@ class NewStoryDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Description
         desc_grp = QGroupBox("DESCRIPTION")
         desc_layout = QVBoxLayout(desc_grp)
         self.desc_edit = QTextEdit()
@@ -804,7 +734,6 @@ class NewStoryDialog(QDialog):
         desc_layout.addWidget(self.desc_edit)
         layout.addWidget(desc_grp)
 
-        # Buttons
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -852,7 +781,6 @@ class BulkCreateDialog(QDialog):
     Rows with a blank summary are flagged as invalid and excluded from creation.
     """
 
-    # Column indices for the preview table
     _COL_ROW      = 0
     _COL_SUMMARY  = 1
     _COL_TYPE     = 2
@@ -870,12 +798,6 @@ class BulkCreateDialog(QDialog):
 
     def __init__(self, rows: list[dict], members: list, issue_types: list,
                  sprints: list, parent=None):
-        """
-        rows        : list of dicts parsed from the CSV (raw string values)
-        members     : list of Jira user dicts (displayName, name/accountId)
-        issue_types : list of {name, id} dicts
-        sprints     : list of sprint dicts from the Agile API
-        """
         super().__init__(parent)
         self.setWindowTitle("Bulk Create Stories — Preview")
         self.setMinimumSize(1000, 580)
@@ -888,7 +810,7 @@ class BulkCreateDialog(QDialog):
         self._default_type = issue_types[0].get("name", "") if issue_types else ""
         self._today       = date.today().strftime("%Y-%m-%d")
 
-        self._resolved    = []   # list of validated row dicts, populated in _build_preview
+        self._resolved    = []
         self._valid_count = 0
 
         layout = QVBoxLayout(self)
@@ -904,7 +826,6 @@ class BulkCreateDialog(QDialog):
         self._summary_lbl.setWordWrap(True)
         layout.addWidget(self._summary_lbl)
 
-        # ── Preview table ────────────────────────────────────────────────────
         self._table = QTableWidget()
         self._table.setColumnCount(9)
         self._table.setHorizontalHeaderLabels([
@@ -927,7 +848,6 @@ class BulkCreateDialog(QDialog):
         self._table.setShowGrid(False)
         layout.addWidget(self._table, 1)
 
-        # ── Footer ───────────────────────────────────────────────────────────
         self._warn_lbl = QLabel("")
         self._warn_lbl.setStyleSheet(f"color: {ACCENT_ORG}; font-size: 11px;")
         self._warn_lbl.setWordWrap(True)
@@ -945,18 +865,12 @@ class BulkCreateDialog(QDialog):
 
         self._build_preview()
 
-    # ── Preview builder ───────────────────────────────────────────────────────
     def _resolve_row(self, raw: dict) -> dict:
-        """
-        Resolve a raw CSV row dict into a validated, API-ready dict.
-        Returns the dict with an added '_issues' list of human-readable warnings.
-        """
         issues = []
         summary = raw.get("summary", "").strip()
         if not summary:
             issues.append("Missing summary — row will be skipped")
 
-        # Issue type
         raw_type = raw.get("issue_type", "").strip().lower()
         if raw_type and raw_type in self._issue_types:
             itype = self._issue_types[raw_type]
@@ -967,7 +881,6 @@ class BulkCreateDialog(QDialog):
         else:
             itype = {"name": "", "id": ""}
 
-        # Priority
         raw_pri = raw.get("priority", "").strip()
         valid_priorities = {"Highest", "High", "Medium", "Low", "Lowest"}
         if raw_pri and raw_pri in valid_priorities:
@@ -977,7 +890,6 @@ class BulkCreateDialog(QDialog):
             if raw_pri:
                 issues.append(f"Unknown priority '{raw_pri}' — using 'Medium'")
 
-        # Story points
         raw_pts = raw.get("story_points", "").strip()
         story_points = None
         if raw_pts:
@@ -986,7 +898,6 @@ class BulkCreateDialog(QDialog):
             except ValueError:
                 issues.append(f"Invalid story points '{raw_pts}' — leaving unset")
 
-        # Assignee
         raw_assignee = raw.get("assignee", "").strip()
         member = None
         if raw_assignee:
@@ -994,7 +905,6 @@ class BulkCreateDialog(QDialog):
             if not member:
                 issues.append(f"Assignee '{raw_assignee}' not found — leaving unassigned")
 
-        # Sprint
         raw_sprint = raw.get("sprint", "").strip()
         sprint = None
         if raw_sprint:
@@ -1002,7 +912,6 @@ class BulkCreateDialog(QDialog):
             if not sprint:
                 issues.append(f"Sprint '{raw_sprint}' not found — leaving unassigned")
 
-        # Due date
         raw_due = raw.get("due_date", "").strip()
         if raw_due:
             try:
@@ -1067,13 +976,12 @@ class BulkCreateDialog(QDialog):
             self._table.setItem(r, self._COL_SPRINT,   cell(row["sprint_name"] or "—"))
             self._table.setItem(r, self._COL_DUE,      cell(row["due_date"]))
 
-            # Status column: issues list or OK
             if not is_valid:
                 status_item = QTableWidgetItem("✗  " + "; ".join(row["_issues"]))
                 status_item.setForeground(QColor(ACCENT_ORG))
             elif has_warn:
                 status_item = QTableWidgetItem("⚠  " + "; ".join(row["_issues"]))
-                status_item.setForeground(QColor("#E3B341"))  # amber
+                status_item.setForeground(QColor("#E3B341"))
             else:
                 status_item = QTableWidgetItem("✓  Ready")
                 status_item.setForeground(QColor(ACCENT_GREEN))
@@ -1093,21 +1001,13 @@ class BulkCreateDialog(QDialog):
         self._create_btn.setEnabled(self._valid_count > 0)
 
     def get_valid_rows(self) -> list[dict]:
-        """Return only the rows that passed validation, ready for API submission."""
         return [r for r in self._resolved if r["_valid"]]
 
 
-# ------------------IMPORT DIALOG CLASS------------------------------
+# ── Import Comments Dialog ────────────────────────────────────────────────────
 class ImportCommentsDialog(QDialog):
     def __init__(self, parsed: dict, loaded_keys: set, story_info: dict,
                  cross_keys=None, cross_map=None, parent=None):
-        """
-        parsed      : {issue_key: comment_text} from the file
-        loaded_keys : set of issue keys currently in the story table
-        story_info  : {issue_key: (summary, assignee)} from the story table
-        cross_keys  : set of keys that have a cross-instance match
-        cross_map   : {active_key: other_instance_key}
-        """
         super().__init__(parent)
         self.setWindowTitle("Import Comments — Preview")
         self.setMinimumWidth(860)
@@ -1141,7 +1041,6 @@ class ImportCommentsDialog(QDialog):
         summary_lbl.setWordWrap(True)
         layout.addWidget(summary_lbl)
 
-        # ── Preview table ────────────────────────────────────────────
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
@@ -1157,7 +1056,6 @@ class ImportCommentsDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-
 
         for key, entry in parsed.items():
             comment  = entry["comment"]
@@ -1181,12 +1079,10 @@ class ImportCommentsDialog(QDialog):
 
             truncated = comment[:100] + ("…" if len(comment) > 100 else "")
             self.table.setItem(row, 4, QTableWidgetItem(truncated))
-
             self.table.setRowHeight(row, 36)
 
         layout.addWidget(self.table, 1)
 
-        # ── Detail pane (Option B) ────────────────────────────────────
         self._detail_frame = QFrame()
         self._detail_frame.setObjectName("card")
         self._detail_frame.setVisible(False)
@@ -1211,12 +1107,10 @@ class ImportCommentsDialog(QDialog):
             lbl.setWordWrap(True)
             detail_layout.addWidget(lbl)
         detail_layout.addWidget(self._detail_comment)
-
         layout.addWidget(self._detail_frame)
 
         self.table.currentRowChanged.connect(self._on_row_changed)
 
-        # ── Footer ────────────────────────────────────────────────────
         if unmatched:
             warn = QLabel(f"⚠  {len(unmatched)} keys not found in current sprint will be skipped.")
             warn.setStyleSheet(f"color: {ACCENT_ORG}; font-size: 11px;")
@@ -1269,12 +1163,13 @@ class ImportCommentsDialog(QDialog):
 
     def get_comments(self) -> dict:
         return self._to_post
-    
+
+
 # ── Worker threads ────────────────────────────────────────────────────────────
 class Worker(QThread):
     result   = pyqtSignal(object)
     error    = pyqtSignal(str)
-    progress = pyqtSignal(int, int)   # (n_done, n_total) — optional; only emitted by functions that support it
+    progress = pyqtSignal(int, int)
 
     def __init__(self, fn, *args, **kwargs):
         super().__init__()
@@ -1308,7 +1203,6 @@ class SettingsDialog(QDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        # Instance toggle
         mode_layout = QHBoxLayout()
         mode_layout.setSpacing(0)
 
@@ -1318,7 +1212,7 @@ class SettingsDialog(QDialog):
             QPushButton:first-child {{ border-radius: 6px 0 0 6px; }}
             QPushButton:last-child  {{ border-radius: 0 6px 6px 0; }}
         """
-        
+
         self.primary_btn = QPushButton("◈  PRIMARY")
         self.primary_btn.setCheckable(True)
         self.primary_btn.setFixedHeight(34)
@@ -1337,7 +1231,6 @@ class SettingsDialog(QDialog):
         mode_layout.addStretch()
         layout.addLayout(mode_layout)
 
-        # Per-instance form
         self.instance_lbl = QLabel("")
         self.instance_lbl.setObjectName("subheading")
         layout.addWidget(self.instance_lbl)
@@ -1415,7 +1308,6 @@ class SettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-        # Internal store for both instances
         self._data = {
             JiraClient.MODE_SECONDARY: {
                 "url":            settings.get("secondary_url", "https://jira.sde.sp.gc1.myngc.com/"),
@@ -1439,7 +1331,6 @@ class SettingsDialog(QDialog):
         self._set_mode(settings.get("mode", JiraClient.MODE_SECONDARY))
 
     def _set_mode(self, mode: str):
-        # Save current fields before switching
         if mode:
             if mode.lower() == "ACyD".lower():
                 mode = JiraClient.MODE_PRIMARY
@@ -1460,7 +1351,6 @@ class SettingsDialog(QDialog):
         self.primary_btn.setChecked(not is_secondary)
         self.instance_lbl.setText(f"{'SECONDARY' if is_secondary else 'PRIMARY'} INSTANCE")
 
-        # Load saved values for this instance
         self.url_edit.setText(self._data[mode]["url"])
         self.token_edit.setText(self._data[mode]["token"])
         self.expiry_edit.setText(self._data[mode].get("token_expiry", ""))
@@ -1479,7 +1369,6 @@ class SettingsDialog(QDialog):
         worker = Worker(client.test_connection)
         worker.result.connect(self._on_test_result)
         worker.error.connect(self._on_test_error)
-        # Keep a reference so the thread isn't garbage-collected mid-run.
         self._test_worker = worker
         worker.finished.connect(lambda: setattr(self, "_test_worker", None))
         worker.start()
@@ -1514,7 +1403,6 @@ class SettingsDialog(QDialog):
             "primary_url":       self._data[JiraClient.MODE_PRIMARY]["url"],
             "primary_token":     self._data[JiraClient.MODE_PRIMARY]["token"],
             "primary_token_expiry": self._data[JiraClient.MODE_PRIMARY].get("token_expiry", ""),
-            # Active instance shortcuts
             "url":   self._data[self._mode]["url"],
             "token": self._data[self._mode]["token"],
             "secondary_default_project": self._data[JiraClient.MODE_SECONDARY]["default_project"],
@@ -1530,19 +1418,20 @@ class SettingsDialog(QDialog):
 
 # ── Story edit panel ──────────────────────────────────────────────────────────
 class StoryEditPanel(QFrame):
-    saved = pyqtSignal(str, dict, str, object, object)   # issue_key, fields, comment, transition_id, target_sprint
+    saved = pyqtSignal(str, dict, str, object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
         self.current_key = None
         self._members = []
-        self._sprints = []          # available sprints for move-to-sprint
-        self._transitions = []      # available status transitions
+        self._sprints = []
+        self._transitions = []
         self._current_sprint_id = None
-        self._snapshot = {}         # field values at load time (for dirty detection)
+        self._snapshot = {}
         self._sp_field = "customfield_10016"
         self._fl_field = "customfield_10100"
+        self._base_url = ""
         self._build_ui()
 
     def _build_ui(self):
@@ -1563,9 +1452,16 @@ class StoryEditPanel(QFrame):
         self.copy_key_btn.setObjectName("dim")
         self.copy_key_btn.setEnabled(False)
         self.copy_key_btn.clicked.connect(self._copy_key)
+        # ── Open in Jira button ───────────────────────────────────────────────
+        self.open_jira_btn = QPushButton("⎋  Open in Jira")
+        self.open_jira_btn.setToolTip("Open this issue in Jira in your browser")
+        self.open_jira_btn.setFixedHeight(28)
+        self.open_jira_btn.setEnabled(False)
+        self.open_jira_btn.clicked.connect(self._open_in_jira)
         hdr.addWidget(self.title_lbl, 1)
         hdr.addWidget(self.key_lbl)
         hdr.addWidget(self.copy_key_btn)
+        hdr.addWidget(self.open_jira_btn)
         layout.addLayout(hdr)
 
         self.status_badge = QLabel("")
@@ -1582,19 +1478,15 @@ class StoryEditPanel(QFrame):
         form.setSpacing(10)
 
         self.assignee_combo = QComboBox()
-        #self.assignee_combo.setMinimumWidth(1000)
         form.addRow("Assignee:", self.assignee_combo)
-        
+
         self.feature_link_edit = QLineEdit()
         self.feature_link_edit.setPlaceholderText("Feature link URL or ID…")
         form.addRow("Feature Link:", self.feature_link_edit)
 
-        # Issue type
         self.issuetype_combo = QComboBox()
-        #self.issuetype_combo.setMinimumWidth(160)
         form.addRow("Issue Type:", self.issuetype_combo)
 
-        # Priority
         self.priority_combo = QComboBox()
         PRIORITIES = [
             ("— Keep current —", None),
@@ -1608,29 +1500,23 @@ class StoryEditPanel(QFrame):
             self.priority_combo.addItem(label, val)
         form.addRow("Priority:", self.priority_combo)
 
-        # Fibonacci story points
-        FIBONACCI = [None, 0, 1, 2, 3, 5, 8, 13, 21]
+        # Fibonacci story points with amber warning for 13 and 21
+        FIBONACCI = [0, 1, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
-        #self.points_combo.setMinimumWidth(140)
         self.points_combo.addItem("— Not set —", None)
-        for v in FIBONACCI[1:]:
+        for v in FIBONACCI:
             label = str(v)
             if v in (13, 21):
                 label += "  — consider splitting"
-            item_idx = self.points_combo.count()
+            idx = self.points_combo.count()
             self.points_combo.addItem(label, v)
             if v in (13, 21):
-                self.points_combo.setItemData(
-                    item_idx, QColor("#E3B341"), Qt.ItemDataRole.ForegroundRole
-                )
+                self.points_combo.setItemData(idx, QColor("#E3B341"), Qt.ItemDataRole.ForegroundRole)
         form.addRow("Story Points:", self.points_combo)
 
-        # Sprint
         self.sprint_combo = QComboBox()
-        #self.sprint_combo.setMinimumWidth(200)
         form.addRow("Sprint:", self.sprint_combo)
 
-        # Due date
         due_row = QHBoxLayout()
         self.due_date = QDateEdit()
         self.due_date.setCalendarPopup(True)
@@ -1652,7 +1538,6 @@ class StoryEditPanel(QFrame):
         status_layout = QHBoxLayout(grp_status)
         status_layout.setSpacing(8)
         self.transition_combo = QComboBox()
-        #self.transition_combo.setMinimumWidth(200)
         self.transition_combo.addItem("— No transition —", None)
         status_layout.addWidget(self.transition_combo, 1)
         layout.addWidget(grp_status)
@@ -1698,7 +1583,6 @@ class StoryEditPanel(QFrame):
 
         layout.addStretch()
 
-        # Save button
         self.save_btn = QPushButton("▶  SAVE CHANGES")
         self.save_btn.setObjectName("save_btn")
         self.save_btn.setMinimumHeight(40)
@@ -1718,6 +1602,10 @@ class StoryEditPanel(QFrame):
         self.desc_edit.textChanged.connect(self._check_dirty)
         self.comment_edit.textChanged.connect(self._check_dirty)
 
+    def _open_in_jira(self):
+        if self.current_key and self._base_url:
+            webbrowser.open(f"{self._base_url}/browse/{self.current_key}")
+
     def _clear_due_date(self):
         self._due_set = False
         self.due_date.setStyleSheet(f"color: {TEXT_DIM};")
@@ -1725,7 +1613,6 @@ class StoryEditPanel(QFrame):
         self._check_dirty()
 
     def _snapshot_state(self) -> dict:
-        """Capture a hashable snapshot of all editable field values."""
         return {
             "assignee":     self.assignee_combo.currentData(),
             "feature_link": self.feature_link_edit.text(),
@@ -1741,7 +1628,6 @@ class StoryEditPanel(QFrame):
         }
 
     def _check_dirty(self):
-        """Enable/disable Save based on whether anything changed from the loaded snapshot."""
         if not self.current_key:
             return
         current = self._snapshot_state()
@@ -1752,11 +1638,11 @@ class StoryEditPanel(QFrame):
         else:
             self.save_btn.setToolTip("No changes to save")
 
-
     def set_members(self, members: list):
-        # Guard against accidentally receiving an invite-response payload
-        # (which contains a "to" key) instead of a user list.
         if members and isinstance(members[0], dict) and "to" in members[0] and "displayName" not in members[0]:
+            return
+        # Don't clear the existing dropdown if the new list is empty
+        if not members:
             return
         self._members = members
         self.assignee_combo.clear()
@@ -1799,10 +1685,6 @@ class StoryEditPanel(QFrame):
             self.transition_combo.addItem(t.get("name", "?"), t.get("id"))
 
     def load_issue(self, issue: dict):
-        # Block all dirty-tracking signals while we populate the widgets so that
-        # programmatic assignments don't fire _check_dirty against the previous
-        # (stale) snapshot. Signals are unblocked and the snapshot is taken at the
-        # end, after every field has been set to its loaded value.
         _tracked = [
             self.assignee_combo, self.feature_link_edit, self.issuetype_combo,
             self.priority_combo, self.points_combo, self.sprint_combo,
@@ -1815,14 +1697,13 @@ class StoryEditPanel(QFrame):
         finally:
             for w in _tracked:
                 w.blockSignals(False)
-        # Capture baseline snapshot AFTER all fields are loaded
         self._snapshot = self._snapshot_state()
         self.save_btn.setEnabled(False)
         self.save_btn.setToolTip("No changes to save")
         self.copy_key_btn.setEnabled(True)
+        self.open_jira_btn.setEnabled(True)
 
     def _load_issue_fields(self, issue: dict):
-        """Populate all widgets from issue data. Called only from load_issue with signals blocked."""
         self.current_key = issue["key"]
         fields = issue.get("fields", {})
 
@@ -1831,19 +1712,16 @@ class StoryEditPanel(QFrame):
         status = fields.get("status", {}).get("name", "")
         self.status_badge.setText(f"◈  {status.upper()}")
 
-        # Assignee
         assignee = fields.get("assignee")
         if assignee:
             self._pending_assignee = (
                 assignee.get("name") or assignee.get("key") or assignee.get("accountId")
             )
-            # Try to set immediately in case members are already loaded
             for i in range(self.assignee_combo.count()):
                 if self.assignee_combo.itemData(i) == self._pending_assignee:
                     self.assignee_combo.setCurrentIndex(i)
                     break
             else:
-                # Not found — add them manually so they always appear
                 display = assignee.get("displayName", self._pending_assignee)
                 self.assignee_combo.insertItem(1, display, self._pending_assignee)
                 self.assignee_combo.setCurrentIndex(1)
@@ -1851,7 +1729,6 @@ class StoryEditPanel(QFrame):
             self._pending_assignee = None
             self.assignee_combo.setCurrentIndex(0)
 
-        # Issue type
         itype = fields.get("issuetype", {})
         itype_id = itype.get("id")
         self.issuetype_combo.setCurrentIndex(0)
@@ -1860,7 +1737,6 @@ class StoryEditPanel(QFrame):
                 self.issuetype_combo.setCurrentIndex(i)
                 break
 
-        # Priority
         priority = fields.get("priority", {})
         pname = priority.get("name") if priority else None
         self.priority_combo.setCurrentIndex(0)
@@ -1869,12 +1745,11 @@ class StoryEditPanel(QFrame):
                 self.priority_combo.setCurrentIndex(i)
                 break
 
-        # Story points
         pts = fields.get(self._sp_field) or fields.get("customfield_10016") or fields.get("story_points")
         self.points_combo.setCurrentIndex(0)
         if pts is not None:
             try:
-                pts_int = int(float(pts))   # Jira often returns points as floats, e.g. 5.0
+                pts_int = int(float(pts))
             except (TypeError, ValueError):
                 pts_int = None
             if pts_int is not None:
@@ -1889,7 +1764,6 @@ class StoryEditPanel(QFrame):
             fl_value = fl_value.get("url", "") or fl_value.get("id", "")
         self.feature_link_edit.setText(str(fl_value) if fl_value else "")
 
-        # Sprint
         sprint_field = fields.get("customfield_10020") or []
         if isinstance(sprint_field, list) and sprint_field:
             current_sprint = sprint_field[-1]
@@ -1898,7 +1772,6 @@ class StoryEditPanel(QFrame):
             self._current_sprint_id = None
         self.sprint_combo.setCurrentIndex(0)
 
-        # Due date
         duedate = fields.get("duedate")
         if duedate:
             self._due_set = True
@@ -1910,23 +1783,20 @@ class StoryEditPanel(QFrame):
             self.due_date.setDate(QDate.currentDate())
             self.due_date.setStyleSheet(f"color: {TEXT_DIM};")
 
-        # Status transitions
         self.transition_combo.setCurrentIndex(0)
 
-        # Description
         desc = fields.get("description") or {}
         plain = self._adf_to_text(desc) if isinstance(desc, dict) else (desc or "")
         self.desc_edit.setPlainText(plain)
 
         self.comment_edit.clear()
 
-        # Populate comment history from already-fetched data (no extra API call)
         comments_data = fields.get("comment", {})
         if isinstance(comments_data, dict):
             all_comments = comments_data.get("comments", [])
         else:
             all_comments = []
-        recent = all_comments[-5:]  # show up to 5 most recent
+        recent = all_comments[-5:]
         if recent:
             lines = []
             full_lines = []
@@ -1943,7 +1813,6 @@ class StoryEditPanel(QFrame):
                     display_text = display_text[:200] + "…"
                 lines.append(f"[{created}] {name}: {display_text}")
             self.comment_history.setPlainText("\n\n".join(lines))
-            # Store the full untruncated text for the expand dialog.
             self._full_comment_text = "\n\n".join(full_lines)
             self._expand_comment_btn.setEnabled(True)
         else:
@@ -1955,11 +1824,9 @@ class StoryEditPanel(QFrame):
         if self.current_key:
             QApplication.clipboard().setText(self.current_key)
             self.copy_key_btn.setText("✓")
-            # Reset the button label after 1.5 seconds
             QTimer.singleShot(1500, lambda: self.copy_key_btn.setText("⎘"))
 
     def _expand_comment(self):
-        """Show the full text of the selected comment in a resizable dialog."""
         full_text = self._full_comment_text if hasattr(self, "_full_comment_text") else ""
         if not full_text:
             return
@@ -2000,65 +1867,52 @@ class StoryEditPanel(QFrame):
             return
         fields = {}
 
-        # Assignee
         aid = self.assignee_combo.currentData()
         fields["assignee"] = {"name": aid} if aid else None
 
-        # Issue type
         itype_id = self.issuetype_combo.currentData()
         if itype_id:
             fields["issuetype"] = {"id": itype_id}
 
-        # Priority
         pname = self.priority_combo.currentData()
         if pname:
             fields["priority"] = {"name": pname}
 
-        # Story points
         pts = self.points_combo.currentData()
         if pts is not None:
             fields[self._sp_field] = pts
-        
+
         fl_val = self.feature_link_edit.text().strip()
         if fl_val:
             fields[self._fl_field] = fl_val
 
-        # Due date
         if self._due_set:
             fields["duedate"] = self.due_date.date().toString("yyyy-MM-dd")
         else:
             fields["duedate"] = None
 
-        # Description
         desc_text = self.desc_edit.toPlainText().strip()
         if desc_text:
             fields["description"] = desc_text
 
-        # Sprint move target (None = no change)
         target_sprint = self.sprint_combo.currentData()
-
-        # Status transition ID (None = no transition)
         transition_id = self.transition_combo.currentData()
-
         comment = self.comment_edit.toPlainText().strip()
         self.saved.emit(self.current_key, fields, comment, transition_id, target_sprint)
 
 
 # ── Export Stories Dialog ─────────────────────────────────────────────────────
 class ExportStoriesDialog(QDialog):
-    """Basket-style picker for selecting which stories to export."""
-
     def __init__(self, issues: list, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Export Stories — Select")
         self.setMinimumSize(640, 520)
         self._issues = issues
-        self._basket = {}   # {key: issue}
+        self._basket = {}
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        # ── Available stories (left) ──────────────────────────────────────────
         avail_lbl = QLabel("AVAILABLE STORIES")
         avail_lbl.setObjectName("subheading")
         layout.addWidget(avail_lbl)
@@ -2075,7 +1929,6 @@ class ExportStoriesDialog(QDialog):
             self._add_avail_item(issue)
         layout.addWidget(self._avail_list)
 
-        # ── Action buttons ────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         add_btn = QPushButton("Add ▶")
         add_btn.clicked.connect(self._add_selected)
@@ -2086,7 +1939,6 @@ class ExportStoriesDialog(QDialog):
         btn_row.addWidget(remove_btn)
         layout.addLayout(btn_row)
 
-        # ── Basket (selected stories) ─────────────────────────────────────────
         basket_lbl = QLabel("SELECTED FOR EXPORT")
         basket_lbl.setObjectName("subheading")
         layout.addWidget(basket_lbl)
@@ -2100,7 +1952,6 @@ class ExportStoriesDialog(QDialog):
         self._basket_count_lbl.setObjectName("dim")
         layout.addWidget(self._basket_count_lbl)
 
-        # ── Dialog buttons ────────────────────────────────────────────────────
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -2166,8 +2017,7 @@ class MainWindow(QMainWindow):
         self._sprints = []
         self._issues = []
         self._workers = []
-        # Field IDs for story points and feature link — updated whenever the
-        # client is (re)created. Defaulting here avoids scattered getattr fallbacks.
+        self._users_cache: list = []
         self._sp_field = "customfield_10016"
         self._fl_field = "customfield_10100"
 
@@ -2175,7 +2025,6 @@ class MainWindow(QMainWindow):
         self._settings = self._load_settings()
         self._status("Ready — configure connection to get started.")
 
-        # Auto-connect if credentials exist
         mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         url   = self._settings.get("secondary_url") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_url")
         token = self._settings.get("secondary_token") if mode == JiraClient.MODE_SECONDARY else self._settings.get("primary_token")
@@ -2185,6 +2034,7 @@ class MainWindow(QMainWindow):
             self._client = JiraClient(url, token, mode)
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
+            self.edit_panel._base_url = self._client.base_url
             mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
             self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
@@ -2192,6 +2042,12 @@ class MainWindow(QMainWindow):
             self._load_projects()
 
         self._check_token_expiry()
+
+        # Periodic token expiry check every 4 hours
+        self._expiry_timer = QTimer(self)
+        self._expiry_timer.setInterval(4 * 60 * 60 * 1000)
+        self._expiry_timer.timeout.connect(self._check_token_expiry)
+        self._expiry_timer.start()
 
     # ── Build ─────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -2201,7 +2057,6 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
         root.setContentsMargins(0, 0, 0, 0)
 
-        # Top bar
         topbar = QFrame()
         topbar.setObjectName("topbar")
         topbar.setFixedHeight(56)
@@ -2213,7 +2068,7 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet(f"font-size: 14px; color: {ACCENT_CYAN}; letter-spacing: 3px;")
         tb_layout.addWidget(logo)
         tb_layout.addStretch()
-        
+
         self.mode_indicator = QLabel("")
         self.mode_indicator.setStyleSheet(
             f"color: {ACCENT_BLUE}; font-size: 11px; letter-spacing: 2px; padding: 0 12px;"
@@ -2240,7 +2095,6 @@ class MainWindow(QMainWindow):
 
         root.addWidget(topbar)
 
-        # Progress bar (above tabs)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setFixedHeight(4)
@@ -2251,19 +2105,16 @@ class MainWindow(QMainWindow):
         """)
         root.addWidget(self.progress)
 
-        # ── Tabs ──────────────────────────────────────────────────────────────
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setVisible(False)
         root.addWidget(self.tabs, 1)
 
-        # ── Tab 1: Stories ────────────────────────────────────────────────────
         stories_tab = QWidget()
         stories_layout = QVBoxLayout(stories_tab)
         stories_layout.setContentsMargins(0, 0, 0, 0)
         stories_layout.setSpacing(0)
 
-        # Filter bar
         filterbar = QFrame()
         filterbar.setStyleSheet(f"background-color: {PANEL_BG}; border-bottom: 1px solid {BORDER};")
         fb_layout = QHBoxLayout(filterbar)
@@ -2324,17 +2175,14 @@ class MainWindow(QMainWindow):
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Filter stories…")
-        #self.search_edit.setMinimumWidth(200)
         self.search_edit.textChanged.connect(self._filter_table)
         fb_layout.addWidget(self.search_edit)
 
         stories_layout.addWidget(filterbar)
 
-        # Main split
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(1)
 
-        # Left – story table
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(16, 16, 8, 16)
@@ -2344,7 +2192,11 @@ class MainWindow(QMainWindow):
         self.story_count_lbl = QLabel("No stories loaded")
         self.story_count_lbl.setObjectName("dim")
         count_row.addWidget(self.story_count_lbl)
-        count_row.addStretch()
+        # ── Persistent sprint label ───────────────────────────────────────────
+        self.sprint_lbl = QLabel("")
+        self.sprint_lbl.setObjectName("dim")
+        self.sprint_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        count_row.addWidget(self.sprint_lbl)
         left_layout.addLayout(count_row)
 
         self.table = QTableWidget()
@@ -2374,12 +2226,14 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.itemSelectionChanged.connect(self._on_story_selected)
+        # ── Row right-click context menu ──────────────────────────────────────
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_row_context_menu)
         self._apply_default_columns()
         left_layout.addWidget(self.table)
 
         splitter.addWidget(left)
 
-        # Right – edit panel
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(8, 16, 16, 16)
@@ -2396,7 +2250,6 @@ class MainWindow(QMainWindow):
         stories_layout.addWidget(splitter, 1)
         self.tabs.addTab(stories_tab, "◈  STORIES")
 
-        # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         version_lbl = QLabel(f"◈  v{APP_VERSION}")
@@ -2405,47 +2258,35 @@ class MainWindow(QMainWindow):
         )
         self.status_bar.addPermanentWidget(version_lbl)
 
-        # ── Keyboard shortcuts ────────────────────────────────────────────────
         self._setup_shortcuts()
 
     def _setup_shortcuts(self):
-
-        # Ctrl+S — Save (only when save button is enabled)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(
             lambda: self.edit_panel.save_btn.click() if self.edit_panel.save_btn.isEnabled() else None
         )
-        # Ctrl+N — New Story
         QShortcut(QKeySequence("Ctrl+N"), self).activated.connect(
             lambda: self.new_story_btn.click() if self.new_story_btn.isEnabled() else None
         )
-        # Ctrl+L — Load Stories
         QShortcut(QKeySequence("Ctrl+L"), self).activated.connect(
             lambda: self.load_btn.click() if self.load_btn.isEnabled() else None
         )
-        # Ctrl+I — Import
         QShortcut(QKeySequence("Ctrl+I"), self).activated.connect(
             lambda: self.import_btn.click() if self.import_btn.isEnabled() else None
         )
-        # Ctrl+E — Export
         QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(
             lambda: self.export_btn.click() if self.export_btn.isEnabled() else None
         )
-        # Ctrl+F — Focus search box
         QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(
             lambda: self.search_edit.setFocus()
         )
-        # Ctrl+C — Copy selected row (visible columns, comma-separated)
-        # Only fires when the table has focus to avoid stomping on normal text copy
         QShortcut(QKeySequence("Ctrl+C"), self.table).activated.connect(
             self._copy_row_short
         )
-        # Ctrl+Shift+C — Copy full issue (all fields, CSV-ready)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(
             self._copy_row_full
         )
 
     def _selected_issue(self):
-        """Return the issue dict for the currently selected table row, or None."""
         row = self.table.currentRow()
         if row < 0:
             return None
@@ -2456,7 +2297,6 @@ class MainWindow(QMainWindow):
         return next((iss for iss in self._issues if iss.get("key") == key), None)
 
     def _copy_row_short(self):
-        """Ctrl+C — copy visible table columns as a comma-separated line."""
         row = self.table.currentRow()
         if row < 0:
             return
@@ -2469,7 +2309,6 @@ class MainWindow(QMainWindow):
         self._status("✓ Row copied to clipboard.")
 
     def _copy_row_full(self):
-        """Ctrl+Shift+C — copy full issue as a single CSV-ready row matching export format."""
         issue = self._selected_issue()
         if not issue:
             return
@@ -2526,19 +2365,40 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(buf.getvalue().strip())
         self._status("✓ Full issue copied to clipboard.")
 
-    # ── Persist settings ──────────────────────────────────────────────────────
-    # ── Token storage ─────────────────────────────────────────────────────────
-    # Tokens are stored in the OS native credential store (Windows Credential
-    # Manager, macOS Keychain, Linux Secret Service) via the `keyring` package.
-    # If keyring is not installed, we fall back to base64 in QSettings with a
-    # one-time warning so existing installs don't silently break.
-    #
-    # Migration: on first save with keyring present, the token is written to the
-    # keychain and the QSettings entry is cleared, so the plaintext copy is removed.
+    # ── Row context menu ──────────────────────────────────────────────────────
+    def _show_row_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+        key_item = self.table.item(row, 0)
+        if not key_item:
+            return
+        key = key_item.text()
 
+        menu = QMenu(self)
+        open_action  = menu.addAction("⎋  Open in Jira")
+        copy_key     = menu.addAction("⎘  Copy Key")
+        copy_row     = menu.addAction("⎘  Copy Row")
+        menu.addSeparator()
+        copy_full    = menu.addAction("⎘  Copy Full Issue")
+
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == open_action:
+            if self.edit_panel._base_url:
+                webbrowser.open(f"{self.edit_panel._base_url}/browse/{key}")
+        elif chosen == copy_key:
+            QApplication.clipboard().setText(key)
+            self._status(f"✓ Copied {key} to clipboard.")
+        elif chosen == copy_row:
+            self.table.selectRow(row)
+            self._copy_row_short()
+        elif chosen == copy_full:
+            self.table.selectRow(row)
+            self._copy_row_full()
+
+    # ── Token storage ─────────────────────────────────────────────────────────
     @staticmethod
     def _save_token(instance: str, token: str) -> bool:
-        """Save token to OS keychain. Returns True on success, False if unavailable."""
         if not _KEYRING_AVAILABLE:
             return False
         try:
@@ -2555,11 +2415,6 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _load_token(instance: str, qs_fallback: str = "") -> str:
-        """
-        Load token from OS keychain.
-        If keyring is unavailable or the entry is missing, falls back to
-        decoding the base64 value that was previously stored in QSettings.
-        """
         if _KEYRING_AVAILABLE:
             try:
                 stored = keyring.get_password(_KEYRING_SERVICE, instance)
@@ -2567,14 +2422,12 @@ class MainWindow(QMainWindow):
                     return stored
             except Exception:
                 pass
-        # Fallback: decode legacy base64 value from QSettings
         try:
             return base64.b64decode(qs_fallback.encode()).decode() if qs_fallback else ""
         except Exception:
             return ""
-        
+
     def _clear_sprint_view(self):
-        """Reset boards, sprints, story table, and edit panel."""
         self.board_combo.blockSignals(True)
         self.board_combo.clear()
         self.board_combo.blockSignals(False)
@@ -2585,7 +2438,9 @@ class MainWindow(QMainWindow):
 
         self.table.setRowCount(0)
         self.story_count_lbl.setText("No stories loaded")
+        self.sprint_lbl.setText("")
         self._issues = []
+        self._users_cache = []
         self._apply_default_columns()
 
         self.export_btn.setEnabled(False)
@@ -2595,13 +2450,13 @@ class MainWindow(QMainWindow):
         self.edit_panel.key_lbl.setText("")
         self.edit_panel.status_badge.setText("")
         self.edit_panel.save_btn.setEnabled(False)
+        self.edit_panel.open_jira_btn.setEnabled(False)
         self.edit_panel._snapshot = {}
 
     def _save_settings(self):
         qs = QSettings("SprintMate", "SprintMate")
         s  = self._settings
 
-        # Non-secret settings stay in QSettings as before
         qs.setValue("mode",                       s.get("mode", ""))
         qs.setValue("secondary_url",               s.get("secondary_url", ""))
         qs.setValue("secondary_token_expiry",      s.get("secondary_token_expiry", ""))
@@ -2616,21 +2471,15 @@ class MainWindow(QMainWindow):
         qs.setValue("primary_filter_projects",       s.get("primary_filter_projects", ""))
         qs.setValue("primary_filter_boards",         s.get("primary_filter_boards", ""))
 
-        # Tokens: prefer the OS keychain; fall back to base64 in QSettings
         for instance, key in [("secondary", "secondary_token"), ("primary", "primary_token")]:
             token = s.get(key, "")
             if self._save_token(instance, token):
-                # Successfully stored in keychain — remove any legacy QSettings entry
                 qs.remove(key)
             else:
-                # keyring unavailable — store base64 as before
                 qs.setValue(key, base64.b64encode(token.encode()).decode() if token else "")
 
     def _load_settings(self) -> dict:
         qs = QSettings("SprintMate", "SprintMate")
-        # Pass the legacy base64 QSettings value as qs_fallback so existing
-        # installs keep working automatically until the user saves once and the
-        # token migrates to the keychain.
         return {
             "mode":                       qs.value("mode", JiraClient.MODE_SECONDARY),
             "secondary_url":               qs.value("secondary_url", ""),
@@ -2669,10 +2518,6 @@ class MainWindow(QMainWindow):
 
     # ── Settings ──────────────────────────────────────────────────────────────
     def _cancel_workers(self):
-        """Disconnect result/error signals on all in-flight workers and ask them to stop.
-        This prevents stale callbacks from a previous client firing against the new one.
-        wait() is called after quit() to ensure the thread has fully stopped before the
-        caller creates a new client."""
         for w in list(self._workers):
             try:
                 w.result.disconnect()
@@ -2697,6 +2542,7 @@ class MainWindow(QMainWindow):
             mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
+            self.edit_panel._base_url = self._client.base_url
             self._sp_field = self._client.story_point_field_id
             self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
@@ -2705,16 +2551,15 @@ class MainWindow(QMainWindow):
             self._check_token_expiry()
             self._load_projects()
 
-    # ── Switch instance (topbar shortcut) ────────────────────────────────────
+    # ── Switch instance ───────────────────────────────────────────────────────
     def _switch_instance(self):
-        """Toggle between Primary and Secondary without opening the settings dialog."""
         if not self._settings:
             return
         current_mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         new_mode = JiraClient.MODE_PRIMARY if current_mode == JiraClient.MODE_SECONDARY else JiraClient.MODE_SECONDARY
 
-        new_url   = self._settings.get("primary_url")     if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_url")
-        new_token = self._settings.get("primary_token")   if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_token")
+        new_url   = self._settings.get("primary_url")   if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_url")
+        new_token = self._settings.get("primary_token") if new_mode == JiraClient.MODE_PRIMARY else self._settings.get("secondary_token")
 
         if not new_url or not new_token:
             QMessageBox.warning(
@@ -2730,6 +2575,7 @@ class MainWindow(QMainWindow):
         self._client = JiraClient(new_url, new_token, new_mode)
         self.edit_panel._sp_field = self._client.story_point_field_id
         self.edit_panel._fl_field = self._client.feature_link_field_id
+        self.edit_panel._base_url = self._client.base_url
         self._sp_field = self._client.story_point_field_id
 
         mode_label = "SECONDARY" if new_mode == JiraClient.MODE_SECONDARY else "PRIMARY"
@@ -2750,7 +2596,6 @@ class MainWindow(QMainWindow):
     _MAX_WORKERS = 5
 
     def _spawn(self, fn, *args, on_result=None, on_error=None):
-        # Guard against runaway thread accumulation from rapid UI interactions.
         active = sum(1 for w in self._workers if w.isRunning())
         if active >= self._MAX_WORKERS:
             self._status(f"⚠ Too many background tasks in flight ({active}); please wait.")
@@ -2768,6 +2613,21 @@ class MainWindow(QMainWindow):
         w.start()
         return w
 
+    # ── User cache ────────────────────────────────────────────────────────────
+    def _refresh_users_cache(self, on_done=None):
+        """Fetch the full user list in the background and cache it."""
+        def _on_result(members):
+            self._users_cache = sorted(members, key=lambda m: m.get("displayName", "").lower())
+            self.edit_panel.set_members(self._users_cache)
+            if on_done:
+                on_done(self._users_cache)
+
+        self._spawn(
+            self._client.search_users, "",
+            on_result=_on_result,
+            on_error=lambda e: self._status("⚠ Could not load assignees (access restricted)"),
+        )
+
     def _load_projects(self):
         self._busy(True)
         self._status("Loading projects…")
@@ -2780,7 +2640,6 @@ class MainWindow(QMainWindow):
         self._busy(False)
         mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
 
-        # Build filter terms for this instance (case-insensitive substring match)
         raw_filter = self._settings.get(f"{mode}_filter_projects", "").strip()
         filter_terms = [t.strip().lower() for t in raw_filter.split(",") if t.strip()] if raw_filter else []
 
@@ -2790,7 +2649,6 @@ class MainWindow(QMainWindow):
                 if any(term in p["key"].lower() or term in p["name"].lower() for term in filter_terms)
             ]
             if not filtered:
-                # No matches — fall back to full list with a status warning
                 self._status(f"⚠ Project filter '{raw_filter}' matched no projects — showing all {len(projects)}.")
                 filtered = projects
             else:
@@ -2812,13 +2670,22 @@ class MainWindow(QMainWindow):
                     self.project_combo.setCurrentIndex(i)
                     break
         self.project_combo.blockSignals(False)
-        # Enable all controls now that we have a valid connection
         self.project_combo.setEnabled(True)
         self.board_combo.setEnabled(True)
         self.sprint_combo.setEnabled(True)
         self.load_btn.setEnabled(True)
         if filtered:
             self._on_project_changed()
+
+    # ── Named error handlers (extracted from lambdas) ─────────────────────────
+    def _on_boards_load_error(self, key: str, e: str):
+        self._status(f"⚠ Could not load boards for {key} (access restricted)")
+
+    def _on_assignees_load_error(self, e: str):
+        self._status("⚠ Could not load assignees (access restricted)")
+
+    def _on_issue_types_load_error(self, key: str, e: str):
+        self._status(f"⚠ Could not load issue types for {key} (access restricted)")
 
     def _on_project_changed(self):
         key = self.project_combo.currentData()
@@ -2830,22 +2697,19 @@ class MainWindow(QMainWindow):
         self._spawn(
             self._client.get_boards, key,
             on_result=self._on_boards_loaded,
-            on_error=lambda e: self._status(f"⚠ Could not load boards for {key} (access restricted)"),
+            on_error=lambda e: self._on_boards_load_error(key, e),
         )
         self._spawn(
-            self._client.search_users, "",
-            on_result=lambda members: self.edit_panel.set_members(
-                sorted(members, key=lambda m: m.get("displayName", "").lower())
-            ),
-            on_error=lambda e: self._status(f"⚠ Could not load assignees (access restricted)"),
+            self._client.get_issue_types, key,
+            on_result=lambda types: self.edit_panel.set_issue_types(types),
+            on_error=lambda e: self._on_issue_types_load_error(key, e),
         )
-
+        self._refresh_users_cache()
 
     def _on_boards_loaded(self, boards):
         self._busy(False)
         mode = self._settings.get("mode", JiraClient.MODE_SECONDARY).lower()
 
-        # Build filter terms for this instance (case-insensitive substring match)
         raw_filter = self._settings.get(f"{mode}_filter_boards", "").strip()
         filter_terms = [t.strip().lower() for t in raw_filter.split(",") if t.strip()] if raw_filter else []
 
@@ -2855,7 +2719,6 @@ class MainWindow(QMainWindow):
                 if any(term in b["name"].lower() for term in filter_terms)
             ]
             if not filtered:
-                # No matches — fall back to full list with a status warning
                 self._status(f"⚠ Board filter '{raw_filter}' matched no boards — showing all {len(boards)}.")
                 filtered = boards
             else:
@@ -2883,15 +2746,15 @@ class MainWindow(QMainWindow):
         bid = self.board_combo.currentData()
         if bid is None or not self._client:
             return
-        
+
         self.sprint_combo.blockSignals(True)
         self.sprint_combo.clear()
         self.sprint_combo.blockSignals(False)
-        
+
         self.table.setRowCount(0)
         self.story_count_lbl.setText("No stories loaded")
         self._issues = []
-        
+
         self._busy(True)
         self._status("Loading sprints…")
         self._spawn(
@@ -2921,7 +2784,6 @@ class MainWindow(QMainWindow):
         sid = self.sprint_combo.currentData()
         if bid is None or sid is None or not self._client:
             return
-        # Warn if there are unsaved edits in the edit panel that would be cleared.
         if self.edit_panel.save_btn.isEnabled():
             reply = QMessageBox.question(
                 self,
@@ -2933,7 +2795,6 @@ class MainWindow(QMainWindow):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-        # Remember which row was active so we can restore it after reload
         self._reselect_key = reselect_key or self.edit_panel.current_key
         mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
@@ -2951,11 +2812,15 @@ class MainWindow(QMainWindow):
         self._populate_table(issues)
         self._status(f"Loaded {len(issues)} stories.")
         self.story_count_lbl.setText(f"{len(issues)} stories")
+        # Update persistent sprint label
+        project = self.project_combo.currentText().split("—")[0].strip()
+        board   = self.board_combo.currentText()
+        sprint  = self.sprint_combo.currentText()
+        self.sprint_lbl.setText(f"{project}  ◈  {board}  ◈  {sprint}")
         self.new_story_btn.setEnabled(True)
         self.bulk_create_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
-        # Re-select the previously active row if we have one
         reselect = getattr(self, "_reselect_key", None)
         if reselect:
             for row in range(self.table.rowCount()):
@@ -2967,12 +2832,10 @@ class MainWindow(QMainWindow):
             self._reselect_key = None
 
     def _apply_default_columns(self):
-        """Show/hide columns according to COLS_DEFAULT_VISIBLE."""
         for col, _ in COLS_TOGGLABLE:
             self.table.setColumnHidden(col, col not in COLS_DEFAULT_VISIBLE)
 
     def _show_column_menu(self, pos):
-        """Right-click context menu on the header to toggle column visibility."""
         menu = QMenu(self)
         for col, label in COLS_TOGGLABLE:
             action = menu.addAction(label)
@@ -2985,14 +2848,10 @@ class MainWindow(QMainWindow):
             self.table.setColumnHidden(col, not self.table.isColumnHidden(col))
 
     def _populate_table(self, issues):
-        # Disable sorting during population to prevent mid-insert reordering,
-        # then reset the sort indicator so each new sprint starts unsorted.
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self.table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
-        # Reset column visibility to default on each new load
         self._apply_default_columns()
-        # Clear any active search filter so stale highlights don't appear on new rows.
         self.search_edit.blockSignals(True)
         self.search_edit.clear()
         self.search_edit.blockSignals(False)
@@ -3012,35 +2871,29 @@ class MainWindow(QMainWindow):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            # KEY
             key_item = QTableWidgetItem(issue["key"])
             key_item.setForeground(QColor(ACCENT_CYAN))
             self.table.setItem(row, COL_KEY, key_item)
 
-            # SUMMARY
             self.table.setItem(row, COL_SUMMARY, QTableWidgetItem(f.get("summary", "")))
 
-            # ASSIGNEE
             assignee = f.get("assignee")
             aname = assignee.get("displayName", "Unassigned") if assignee else "—"
             a_item = QTableWidgetItem(aname)
             a_item.setForeground(QColor(TEXT_SEC))
             self.table.setItem(row, COL_ASSIGNEE, a_item)
 
-            # STATUS
             status = f.get("status", {}).get("name", "")
             s_item = QTableWidgetItem(status)
             s_item.setForeground(QColor(status_colors.get(status, TEXT_SEC)))
             s_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, COL_STATUS, s_item)
 
-            # DUE DATE
             due = f.get("duedate", "") or ""
             due_item = QTableWidgetItem(due[:10] if due else "—")
             due_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, COL_DUE_DATE, due_item)
 
-            # STORY POINTS
             pts = f.get(sp_field) or f.get("customfield_10016") or f.get("story_points") or ""
             try:
                 pts_val = int(float(pts)) if pts else None
@@ -3051,17 +2904,14 @@ class MainWindow(QMainWindow):
             pts_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, COL_STORY_PTS, pts_item)
 
-            # PRIORITY
             priority = (f.get("priority") or {}).get("name", "—")
             pri_item = QTableWidgetItem(priority)
             pri_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, COL_PRIORITY, pri_item)
 
-            # ISSUE TYPE
             itype = (f.get("issuetype") or {}).get("name", "—")
             self.table.setItem(row, COL_ISSUE_TYPE, QTableWidgetItem(itype))
 
-            # FEATURE LINK
             fl = f.get(fl_field, "") or ""
             self.table.setItem(row, COL_FEATURE_LNK, QTableWidgetItem(str(fl)))
 
@@ -3071,7 +2921,7 @@ class MainWindow(QMainWindow):
 
     def _filter_table(self, text: str):
         term = text.lower()
-        highlight_bg = QColor(ACCENT_BLUE).darker(180)   # subtle tint on matched cells
+        highlight_bg = QColor(ACCENT_BLUE).darker(180)
         for row in range(self.table.rowCount()):
             row_matches = False
             for col in range(self.table.columnCount()):
@@ -3083,7 +2933,7 @@ class MainWindow(QMainWindow):
                     row_matches = True
                     item.setBackground(highlight_bg)
                 else:
-                    item.setBackground(QColor(0, 0, 0, 0))  # transparent — restore default
+                    item.setBackground(QColor(0, 0, 0, 0))
             self.table.setRowHidden(row, bool(term) and not row_matches)
 
     def _on_story_selected(self):
@@ -3098,23 +2948,20 @@ class MainWindow(QMainWindow):
         issue = next((i for i in self._issues if i["key"] == key), None)
         if not issue:
             return
-    
+
         self.edit_panel.load_issue(issue)
         self._spawn(
             self._client.get_issue_transitions, key,
             on_result=self.edit_panel.set_transitions,
         )
-        # Use the same full user search as New Story dialog
-        self._spawn(
-            self._client.search_users, "",
-            on_result=lambda members: self.edit_panel.set_members(
-                sorted(members, key=lambda m: m.get("displayName", "").lower())
-            ),
-        )
+        # Use cached user list; fetch only if cache is empty
+        if self._users_cache:
+            self.edit_panel.set_members(self._users_cache)
+        else:
+            self._refresh_users_cache()
 
     # ── Export ────────────────────────────────────────────────────────────────
     def _build_export_filename(self) -> str:
-        """Build a suggested filename from project-board-sprint-date."""
         def slugify(text: str) -> str:
             text = re.sub(r'[^\w\s-]', '', text)
             text = re.sub(r'[\s_]+', '-', text.strip())
@@ -3127,7 +2974,6 @@ class MainWindow(QMainWindow):
         return f"{project}-{board}-{sprint}-{today}.csv"
 
     def _do_export_csv(self, issues: list, path: str):
-        """Write issues to a flat CSV at path."""
         sp_field = self._sp_field
         fl_field = self.edit_panel._fl_field
 
@@ -3145,8 +2991,7 @@ class MainWindow(QMainWindow):
                 fields = issue.get("fields") or {}
 
                 assignee_obj = fields.get("assignee") or {}
-                assignee = (assignee_obj.get("displayName") or
-                            assignee_obj.get("name") or "")
+                assignee = (assignee_obj.get("displayName") or assignee_obj.get("name") or "")
 
                 status = (fields.get("status") or {}).get("name", "")
                 issue_type = (fields.get("issuetype") or {}).get("name", "")
@@ -3161,7 +3006,6 @@ class MainWindow(QMainWindow):
                 feature_link = fields.get(fl_field, "") or ""
                 due_date     = fields.get("duedate", "") or ""
 
-                # Sprint name from customfield_10020 or sprint list
                 sprint_name = ""
                 sprint_data = fields.get("customfield_10020") or fields.get("sprint")
                 if isinstance(sprint_data, list) and sprint_data:
@@ -3169,14 +3013,11 @@ class MainWindow(QMainWindow):
                 elif isinstance(sprint_data, dict):
                     sprint_name = sprint_data.get("name", "")
 
-                # Description — plain text
                 desc = fields.get("description") or ""
                 if isinstance(desc, dict):
-                    # ADF fallback — flatten to plain text
                     desc = self.edit_panel._adf_to_text(desc)
                 desc = desc.replace("\n", " ").strip()
 
-                # Comments — pipe-separated, oldest to newest
                 comments_data = (fields.get("comment") or {}).get("comments", [])
                 comment_parts = []
                 for c in comments_data:
@@ -3207,7 +3048,6 @@ class MainWindow(QMainWindow):
     def _export_stories(self):
         if not self._issues:
             return
-        # Ask the user: export all or select
         msg = QMessageBox(self)
         msg.setWindowTitle("Export Stories")
         msg.setText(f"Export all {len(self._issues)} stories, or select specific ones?")
@@ -3217,7 +3057,6 @@ class MainWindow(QMainWindow):
         msg.setDefaultButton(btn_all)
         msg.exec()
         clicked = msg.clickedButton()
-        # Map: All = export everything, Select = open picker, Cancel = abort
         if clicked is btn_all:
             issues_to_export = self._issues
         elif clicked is btn_select:
@@ -3275,10 +3114,8 @@ class MainWindow(QMainWindow):
                 "  key, summary, assignee, comment")
             return
 
-        # Build story_info from the authoritative issues list, not the table widget.
-        # Using the table would miss issues hidden by an active search filter.
         loaded_keys = set()
-        story_info  = {}  # {key: (summary, assignee)}
+        story_info  = {}
         for issue in self._issues:
             k = issue.get("key", "")
             if not k:
@@ -3289,7 +3126,6 @@ class MainWindow(QMainWindow):
             aname = assignee.get("displayName", "") if assignee else ""
             story_info[k] = (f.get("summary", ""), aname)
 
-        # Build other-instance client if settings available
         other_client = None
         s = self._settings
         active_mode = s.get("mode", JiraClient.MODE_SECONDARY)
@@ -3298,15 +3134,7 @@ class MainWindow(QMainWindow):
         elif active_mode == JiraClient.MODE_PRIMARY and s.get("secondary_url") and s.get("secondary_token"):
             other_client = JiraClient(s["secondary_url"], s["secondary_token"], JiraClient.MODE_SECONDARY)
 
-        # Cross-instance matching by summary + assignee from the file itself.
-        # Uses fuzzy contains-search (summary ~ "...") to tolerate minor casing/
-        # punctuation differences. Falls back to exact match only when the contains
-        # search returns nothing.
-        # cross_map: {active_key: other_instance_key}
-
-        # Hoisted out of the per-entry loop — was previously re-defined on every iteration.
         def _best_match(candidates, target_summary, target_assignee):
-            """Return the best-matching issue key, preferring assignee match."""
             target_summary_lc   = target_summary.lower()
             target_assignee_lc  = target_assignee.lower()
             scored = []
@@ -3327,38 +3155,24 @@ class MainWindow(QMainWindow):
             return scored[0][1] if scored and scored[0][0] > 0 else None
 
         def _sanitise_jql(value: str) -> str:
-            """
-            Escape characters that are special in Jira JQL string literals.
-            Handles double-quotes, backslashes, and strips wildcard/reserved
-            characters (%, *, ?) that would corrupt a ~ or = query.
-            """
-            # Escape backslash first, then double-quote
             value = value.replace("\\", "\\\\").replace('"', '\\"')
-            # Remove characters that are JQL wildcards or break the parser
             value = value.replace("%", "").replace("*", "").replace("?", "")
             return value
 
         cross_map = {}
         if other_client:
             for key, entry in parsed.items():
-                # If the file explicitly paired two keys, use that mapping directly
-                # without any JQL lookup — explicit keys always take precedence.
                 paired = entry.get("paired_key")
                 if paired and paired in parsed:
-                    # Only add the mapping if the paired key belongs to the other
-                    # instance (i.e. not in the active instance's loaded stories).
                     if key in loaded_keys and paired not in loaded_keys:
                         cross_map[key] = paired
-                    # The reverse direction is handled when we iterate paired's entry
                     continue
 
-                # No explicit pairing — fall back to JQL summary/assignee matching
                 file_summary  = (entry["summary"] or "").strip()
                 file_assignee = (entry["assignee"] or "").strip()
                 if not file_summary:
                     continue
 
-                # Try fuzzy contains-search first
                 safe_summary = _sanitise_jql(file_summary)
                 jql = f'summary ~ "{safe_summary}"'
                 if file_assignee:
@@ -3366,7 +3180,6 @@ class MainWindow(QMainWindow):
                     jql += f' AND assignee = "{safe_assignee}"'
                 matches = other_client.search_issues_jql(jql, fields="summary,assignee")
 
-                # Fall back to exact match if contains search returned nothing
                 if not matches:
                     jql_exact = f'summary = "{safe_summary}"'
                     matches = other_client.search_issues_jql(jql_exact, fields="summary,assignee")
@@ -3384,7 +3197,6 @@ class MainWindow(QMainWindow):
                 n  = len(to_post)
                 nc = len({k for k in to_post if k in cross_keys})
                 self._busy(True)
-                # Switch progress bar to bounded mode so we see per-comment progress
                 self.progress.setRange(0, n)
                 self.progress.setValue(0)
                 self._status(f"Posting {n} comments ({nc} to both instances)…")
@@ -3394,25 +3206,22 @@ class MainWindow(QMainWindow):
                     self._status(f"Posting comments… {done}/{total}")
 
                 def _on_done(result):
-                    self.progress.setRange(0, 0)   # back to indeterminate
+                    self.progress.setRange(0, 0)
                     self._busy(False)
                     posted   = result.get("posted", n)          if isinstance(result, dict) else n
                     failures = result.get("cross_failures", []) if isinstance(result, dict) else []
 
-                    # Separate primary failures from cross-post failures
                     primary_failures = [f for f in failures if "(primary)" in f]
                     cross_failures   = [f for f in failures if "(primary)" not in f]
                     succeeded        = posted - len(primary_failures)
 
                     if not failures:
-                        # All good
                         QMessageBox.information(
                             self, "Comments Posted",
                             f"✓ Successfully posted {succeeded} comment{'s' if succeeded != 1 else ''}."
                         )
                         self._status(f"✓ Posted {succeeded} comment{'s' if succeeded != 1 else ''} successfully.")
                     elif primary_failures and succeeded == 0:
-                        # Everything failed
                         detail = "\n".join(primary_failures[:10])
                         if len(primary_failures) > 10:
                             detail += f"\n… and {len(primary_failures) - 10} more."
@@ -3422,7 +3231,6 @@ class MainWindow(QMainWindow):
                         )
                         self._status(f"✗ All {len(primary_failures)} comments failed to post.")
                     else:
-                        # Partial success
                         lines = [f"✓ Posted {succeeded} of {posted} comment{'s' if posted != 1 else ''} successfully."]
                         if primary_failures:
                             lines.append(f"\n✗ {len(primary_failures)} primary failure{'s' if len(primary_failures) != 1 else ''}:")
@@ -3443,20 +3251,6 @@ class MainWindow(QMainWindow):
                 )
 
     def _parse_comments_file(self, raw: str) -> dict:
-        """
-        Parse text/markdown comment file. Supports one or two Jira keys per line.
-
-        Single key:
-            KEY-123 - Task Summary - Assignee Name: comment text
-            KEY-123 | Task Summary | Assignee Name: comment text
-
-        Dual key (order independent — matched to instances by loaded_keys later):
-            KEY-123,OTHER-456 - Task Summary - Assignee Name: comment text
-            KEY-123,OTHER-456 | Task Summary | Assignee Name: comment text
-
-        Returns {issue_key: {"comment", "summary", "assignee", "paired_key"}}
-        paired_key is set when a second key is present on the line; None otherwise.
-        """
         KEY_RE = r'[A-Z][A-Z0-9]+-\d+'
         result = {}
         SEP = r'\s*(?:[-|~;])\s*'
@@ -3466,18 +3260,14 @@ class MainWindow(QMainWindow):
             if not line:
                 continue
 
-            # Extract all Jira keys from the start of the line
             keys_found = re.findall(KEY_RE, line)
             if not keys_found:
                 continue
 
-            # Strip all found keys (and any comma/space between them) from the
-            # front of the line, leaving just the summary/assignee/comment portion
             remainder = re.sub(
                 rf'^(?:{KEY_RE}\s*[,\s]\s*)+', '', line
             ).strip()
 
-            # Parse remainder: summary SEP assignee: comment
             match = re.match(
                 rf'^(.+?){SEP}(.+?)\s*:\s*(.+)$',
                 remainder
@@ -3493,7 +3283,7 @@ class MainWindow(QMainWindow):
 
             paired_key = keys_found[1] if len(keys_found) >= 2 else None
 
-            for key in keys_found[:2]:   # cap at two keys per line
+            for key in keys_found[:2]:
                 result[key] = {
                     "comment":    comment,
                     "summary":    summary,
@@ -3504,22 +3294,6 @@ class MainWindow(QMainWindow):
         return result
 
     def _parse_comments_csv(self, path: str) -> dict:
-        """
-        Parse a CSV file into the same format as _parse_comments_file.
-
-        Expected columns (order-insensitive, header row required):
-            key, summary, assignee, comment
-
-        Optional second key column:
-            key2  (or key_2, second_key, other_key — all matched case-insensitively)
-
-        When key2 is present, two entries are created sharing the same
-        summary/assignee/comment, with paired_key set on each so the
-        cross-map can be pre-populated without JQL lookup.
-
-        Column names are matched case-insensitively. Any extra columns are ignored.
-        Returns {issue_key: {"comment": str, "summary": str, "assignee": str, "paired_key": str|None}}
-        """
         KEY_RE = r'^[A-Z][A-Z0-9]+-\d+$'
         result = {}
         try:
@@ -3533,7 +3307,6 @@ class MainWindow(QMainWindow):
                 summary_col  = normalised.get("summary")
                 assignee_col = normalised.get("assignee")
                 comment_col  = normalised.get("comment")
-                # Accept several natural names for the second key column
                 key2_col = (normalised.get("key2") or normalised.get("key_2") or
                             normalised.get("second_key") or normalised.get("other_key"))
 
@@ -3547,7 +3320,6 @@ class MainWindow(QMainWindow):
                     comment = (row.get(comment_col)   or "").strip()
                     key2    = (row.get(key2_col)      or "").strip().upper() if key2_col else ""
 
-                    # Validate key2 looks like a Jira key
                     if key2 and not re.match(KEY_RE, key2):
                         key2 = ""
 
@@ -3575,7 +3347,6 @@ class MainWindow(QMainWindow):
     def _post_imported_comments(self, comments: dict,
                                 cross_map: dict = None, other_client=None,
                                 progress_cb=None):
-        """Post comments one by one, calling progress_cb(done, total) after each."""
         cross_map = cross_map or {}
         total = len(comments)
         cross_failures = []
@@ -3601,7 +3372,6 @@ class MainWindow(QMainWindow):
     # ── Bulk Create ───────────────────────────────────────────────────────────
     @staticmethod
     def _download_bulk_template():
-        """Write a blank CSV template to a user-chosen path."""
         path, _ = QFileDialog.getSaveFileName(
             None, "Save Bulk Create Template", "sprintmate_bulk_template.csv",
             "CSV Files (*.csv)"
@@ -3612,19 +3382,17 @@ class MainWindow(QMainWindow):
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(BulkCreateDialog.TEMPLATE_HEADERS)
-                # Write one example row so the user understands the format
                 writer.writerow([
-                    "Example story summary",  # summary
-                    "Story",                  # issue_type
-                    "Medium",                 # priority
-                    "5",                      # story_points
-                    "",                       # assignee  (display name)
-                    "",                       # sprint    (sprint name)
-                    date.today().strftime("%Y-%m-%d"),  # due_date
-                    "Optional description",   # description
+                    "Example story summary",
+                    "Story",
+                    "Medium",
+                    "5",
+                    "",
+                    "",
+                    date.today().strftime("%Y-%m-%d"),
+                    "Optional description",
                 ])
-            QMessageBox.information(None, "Template Saved",
-                                    f"Template saved to:\n{path}")
+            QMessageBox.information(None, "Template Saved", f"Template saved to:\n{path}")
         except Exception as e:
             QMessageBox.critical(None, "Save Failed", str(e))
 
@@ -3633,7 +3401,6 @@ class MainWindow(QMainWindow):
         if not project_key or not self._client:
             return
 
-        # Offer template download first
         choice = QMessageBox.question(
             self, "Bulk Create Stories",
             "Do you need the CSV template first?\n\n"
@@ -3654,7 +3421,6 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        # Parse the CSV
         rows = []
         try:
             with open(path, newline="", encoding="utf-8-sig") as f:
@@ -3662,7 +3428,6 @@ class MainWindow(QMainWindow):
                 if not reader.fieldnames:
                     QMessageBox.warning(self, "Empty File", "The CSV file has no header row.")
                     return
-                # Normalise headers to lowercase so the file is forgiving
                 normalised = {h.strip().lower(): h for h in reader.fieldnames}
                 for raw_row in reader:
                     rows.append({
@@ -3677,13 +3442,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Data", "The CSV file contains no data rows.")
             return
 
-        # Gather members, types, sprints for validation
-        try:
-            members = self._client.search_users("")
-            members.sort(key=lambda m: m.get("displayName", "").lower())
-        except Exception:
-            members = self.edit_panel._members
-
+        members = self._users_cache or []
         issue_types = [
             {"name": self.edit_panel.issuetype_combo.itemText(i),
              "id":   self.edit_panel.issuetype_combo.itemData(i)}
@@ -3751,55 +3510,57 @@ class MainWindow(QMainWindow):
         if not key or not self._client:
             return
 
-        # Always do a full paginated user search for the dialog
-        # rather than using the project-scoped members list which
-        # may be incomplete or restricted
-        try:
-            members = self._client.search_users("")
-            members.sort(key=lambda m: m.get("displayName", "").lower())
-        except Exception:
-            members = self.edit_panel._members  # fall back to whatever we have
-
-        dlg = NewStoryDialog(
-            project_key=key,
-            members=members,
-            issue_types=[{"name": self.edit_panel.issuetype_combo.itemText(i),
-                        "id": self.edit_panel.issuetype_combo.itemData(i)}
-                        for i in range(self.edit_panel.issuetype_combo.count())],
-            sprints=self._sprints,
-            parent=self,
-        )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            vals = dlg.get_values()
-            self._busy(True)
-            self._status("Creating story…")
-            self._spawn(
-                self._client.create_issue,
-                key,
-                vals["summary"],
-                vals["issue_type"],
-                vals["description"],
-                vals["assignee_id"],
-                vals["priority"],
-                vals["story_points"],
-                vals["sprint_id"],
-                vals["due_date"],
-                on_result=self._on_story_created,
-                on_error=lambda e: (
-                    self._busy(False),
-                    self._status(f"✗ Failed to create story."),
-                    QMessageBox.critical(self, "Create Failed", str(e)),
-                ),
+        def _show_dialog(members):
+            dlg = NewStoryDialog(
+                project_key=key,
+                members=members,
+                issue_types=[{"name": self.edit_panel.issuetype_combo.itemText(i),
+                            "id": self.edit_panel.issuetype_combo.itemData(i)}
+                            for i in range(self.edit_panel.issuetype_combo.count())],
+                sprints=self._sprints,
+                parent=self,
             )
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                vals = dlg.get_values()
+                self._busy(True)
+                self._status("Creating story…")
+                self._spawn(
+                    self._client.create_issue,
+                    key,
+                    vals["summary"],
+                    vals["issue_type"],
+                    vals["description"],
+                    vals["assignee_id"],
+                    vals["priority"],
+                    vals["story_points"],
+                    vals["sprint_id"],
+                    vals["due_date"],
+                    on_result=self._on_story_created,
+                    on_error=lambda e: (
+                        self._busy(False),
+                        self._status("✗ Failed to create story."),
+                        QMessageBox.critical(self, "Create Failed", str(e)),
+                    ),
+                )
+
+        if self._users_cache:
+            _show_dialog(self._users_cache)
+        else:
+            self._busy(True)
+            self._status("Loading users…")
+
+            def _on_users_ready(members):
+                self._busy(False)
+                _show_dialog(members)
+
+            self._refresh_users_cache(on_done=_on_users_ready)
 
     def _on_story_created(self, result: dict):
         self._busy(False)
-        # Jira returns error payloads as 2xx with {"errorMessages": [...], "errors": {...}}
-        # rather than raising HTTP errors in some configurations — check explicitly.
         errors = result.get("errorMessages") or list(result.get("errors", {}).values())
         if errors:
             msg = "\n".join(str(e) for e in errors)
-            self._status(f"✗ Failed to create story.")
+            self._status("✗ Failed to create story.")
             QMessageBox.critical(self, "Create Failed", msg)
             return
         key = result.get("key", "")
@@ -3814,21 +3575,20 @@ class MainWindow(QMainWindow):
         self._status(f"Saving {key}…")
         self._spawn(
             self._do_save, key, fields, comment, transition_id, target_sprint,
-            on_result=lambda _: self._on_saved(key),
+            on_result=lambda result: self._on_saved(key, result),
         )
 
     def _do_save(self, key, fields, comment, transition_id, target_sprint):
+        pts_dropped = False
         try:
             self._client.update_issue(key, fields)
         except RuntimeError as e:
-            # Re-parse the error message to detect a story-point field rejection.
-            # _request now embeds the structured Jira error detail in the message,
-            # so we look for the dynamic field ID or the well-known fallback ID.
             sp = self._client.story_point_field_id
             err_str = str(e)
             if sp in err_str or "customfield_10016" in err_str:
                 fields_no_pts = {k: v for k, v in fields.items() if k not in (sp, "customfield_10016")}
                 self._client.update_issue(key, fields_no_pts)
+                pts_dropped = True
             else:
                 raise
         if transition_id:
@@ -3837,20 +3597,26 @@ class MainWindow(QMainWindow):
             self._client.move_to_sprint(key, target_sprint)
         if comment:
             self._client.add_comment(key, comment)
-        return True
+        return {"pts_dropped": pts_dropped}
 
-    def _on_saved(self, key: str):
+    def _on_saved(self, key: str, result: dict = None):
         self._busy(False)
-        self._status(f"✓ {key} updated successfully.")
-        # Reset dirty state so save button disables until next edit
+        if result and result.get("pts_dropped"):
+            QMessageBox.warning(
+                self, "Story Points Not Saved",
+                f"⚠ {key} was updated, but story points were rejected by Jira.\n"
+                "This usually means the points field is read-only for this issue type.\n"
+                "All other changes were saved successfully."
+            )
+            self._status(f"⚠ {key} updated — story points were not saved.")
+        else:
+            self._status(f"✓ {key} updated successfully.")
         self.edit_panel._snapshot = self.edit_panel._snapshot_state()
         self.edit_panel.save_btn.setEnabled(False)
         self.edit_panel.save_btn.setToolTip("No changes to save")
-        # Refresh and re-select the saved story
         self._load_sprint_issues(reselect_key=key)
 
     def closeEvent(self, event):
-        """Guard against closing while a save is in flight or edits are unsaved."""
         in_flight = sum(1 for w in self._workers if w.isRunning())
         if in_flight:
             reply = QMessageBox.question(
