@@ -3,7 +3,7 @@
 
 ### Features
 
-* **CSV comment import now supports comma-separated keys in the key column.** Previously a CSV row could target at most two Jira keys via the separate key2 column. The key column now accepts any number of comma-separated keys (e.g. PROJECT1-123, PROJECT2-456, PROJECT3-789), each of which receives the comment. All keys are validated against the standard Jira key pattern; invalid tokens are silently skipped. The legacy key2 column (and its aliases key_2, second_key, other_key) continues to work as a fallback when only a single key appears in the key column, so existing CSVs require no changes.
+* **CSV comment import now supports comma-separated keys in the key column.** Previously a CSV row could target at most two Jira keys via the separate key2 column. The key column now accepts any number of comma-separated keys (e.g. `PROJECT1-123`, `PROJECT2-456`, `PROJECT3-789`), each of which receives the comment. All keys are validated against the standard Jira key pattern; invalid tokens are silently skipped. The legacy key2 column (and its aliases `key_2`, `second_key`, `other_key`) continues to work as a fallback when only a single key appears in the key column, so existing CSVs require no changes.
 
 ### Improvements
 
