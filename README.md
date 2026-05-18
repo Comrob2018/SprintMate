@@ -228,3 +228,93 @@ The suggested filename is auto-generated from the current project, board, sprint
 5. Click **Test Connection** — you should see a green "Connected as …" confirmation.
 6. Click **Save**. Repeat steps 3–5 for the other instance if needed.
 7. The app will connect automatically and load your projects. Select a project, board, and sprint, then click **Load Stories**.
+
+---
+
+### How to edit and save a story
+
+1. Load a sprint (see above).
+2. Click any row in the table to open it in the edit panel on the right.
+3. Change any fields you need — assignee, priority, story points, due date, description, etc.
+4. Optionally select a **Status Transition** to move the story through its workflow, and/or type a comment in **Add Comment**.
+5. Press `Ctrl+S` or click **▶ SAVE CHANGES**. The story is updated in Jira and the table refreshes automatically.
+
+---
+
+### How to update multiple stories quickly
+
+1. Load a sprint.
+2. Use the **filter box** (`Ctrl+F`) to narrow the table to the stories you want — type a name, key, or status.
+3. Click the first story, make your changes, and press `Ctrl+S`.
+4. Click the next story in the table and repeat. The edit panel loads each story's current values fresh each time.
+
+---
+
+### How to move a story to a different sprint
+
+1. Click the story in the table to open it in the edit panel.
+2. In the **Sprint** dropdown (under STORY FIELDS), select the destination sprint.
+3. Press `Ctrl+S` or click **▶ SAVE CHANGES**. The story is moved on save.
+
+> The story will disappear from the current sprint view after the table refreshes, since it now belongs to a different sprint.
+
+---
+
+### How to bulk-create stories from a spreadsheet
+
+1. Prepare a CSV file with a header row. The only required column is `summary`; all others are optional:
+   ```
+   summary,issue_type,priority,story_points,assignee,sprint,due_date,description
+   ```
+2. Load a sprint so that issue types, members, and sprints are available for validation.
+3. Click **＋＋ Bulk Create** in the filter bar and select your CSV file.
+4. Review the preview dialog — each row shows its resolved values and any warnings (unrecognised assignee, invalid date, etc.). Rows with a blank summary are highlighted and will be skipped.
+5. Click **▶ Create Stories**. The app creates each valid story and refreshes the table when done.
+
+---
+
+### How to export a sprint to CSV
+
+1. Load the sprint you want to export.
+2. Click **⬇ Export** (or press `Ctrl+E`).
+3. Choose **Yes** to export all stories, or **No** to open the selection picker. In the picker, search and double-click stories to add them to the export basket, then click **Export Selected**.
+4. Choose a save location — the filename is pre-filled based on the project, board, sprint, and today's date.
+5. The CSV includes key, summary, assignee, status, issue type, priority, story points, feature link, due date, sprint, description, and comments.
+
+---
+
+### How to import comments in bulk
+
+1. Prepare a file with one comment per entry. Either a text/Markdown file:
+   ```
+   KEY-123 - Task Summary - Assignee Name: Your comment here
+   ```
+   or a CSV file with columns `key, summary, assignee, comment`.
+2. Load the sprint that contains the stories you want to comment on.
+3. Click **📄 Import** (or press `Ctrl+I`) and select your file.
+4. Review the preview dialog. **Matched** entries (key found in the current sprint) are ready to post. **Unmatched** entries are skipped. Any entries that also match a story on the other instance are highlighted in cyan as cross-post targets.
+5. Click **OK** to post. Progress is shown per comment; any failures are reported in the status bar without stopping the rest of the batch.
+
+---
+
+### How to switch between instances
+
+1. Click **⇄ Switch Instance** in the top bar at any time.
+2. The app swaps to the other instance, clears the current view, and reloads your projects automatically.
+3. If the target instance has no saved credentials, you will be prompted to configure it first via **⚙ Configure**.
+
+---
+
+### How to copy a story to the clipboard
+
+- **`Ctrl+C`** (with the table focused) — copies the visible columns of the selected row as a comma-separated line, useful for pasting into a chat or email.
+- **`Ctrl+Shift+C`** — copies the full story as a CSV-ready row matching the export format, including description and all comments.
+- The **⎘** button in the edit panel header copies just the issue key (e.g. `PROJECT1-123`).
+
+---
+## Notes
+
+- The app targets **Jira Data Center** exclusively and uses the **REST API v2** and the **Agile API v1.0** for boards and sprints.
+- All API calls run on background threads — the UI stays responsive during loads. A maximum of 5 background operations can run concurrently.
+- Settings (URLs, default project/board, token expiry, project/board filters) are stored via `QSettings` (registry on Windows, `~/.config` on Linux, `~/Library/Preferences` on macOS). PAT tokens are stored in the OS keychain when `keyring` is available.
+- On first save with `keyring` present, any token previously stored as base64 in QSettings is automatically migrated to the keychain and the legacy entry is removed.
