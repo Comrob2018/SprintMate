@@ -1,12 +1,42 @@
 # SprintMate Changelog
-## [2.11.7] — 2026-05-16
+## [2.11.8] — 2026-05-18
+
 ### Bug Fixes
-* **`on_done` callback in `_refresh_users_cache` evaluated eagerly.** The tuple lambda `(self._busy(False), _show_dialog(members))` caused `_busy(False)` to fire immediately rather than after the fetch completed, leaving the progress bar in an incorrect state. Replaced with a named inner function that sequences the calls correctly.
-* **"Open in Jira" button remained enabled after project or instance change.** The button was not included in the `_clear_sprint_view` reset, leaving it active with no issue loaded. Now disabled alongside all other edit panel controls on clear.
-### Features
-* **Right-click context menu added to the story table.** Right-clicking any row now offers "Open in Jira", "Copy Key", "Copy Row", and "Copy Full Issue" without requiring the story to be loaded in the edit panel first.
-* **Persistent sprint label added to the story table header.** A label now shows the currently loaded project, board, and sprint above the story list, remaining visible while working in the edit panel so context is never lost.
+
+* **`_do_save` network and API failures now surface to the user.** The `_spawn` call in `_on_save_story` had no `on_error` handler, so any exception raised during a save — network failure, HTTP error, or Jira rejection — fell through to the default worker error path without clearing the busy indicator or showing a contextual dialog. Added an explicit `on_error` handler that clears the progress indicator, updates the status bar with a failure message, and shows a critical dialog, consistent with every other spawn call in `MainWindow`.
+
+* **`search_issues_jql` no longer silently discards errors.** The method caught all exceptions and returned an empty list, making HTTP failures and network errors indistinguishable from a genuine zero-result search. Replaced the broad `except Exception` with specific `HTTPError` and `URLError`/`OSError` handlers that raise descriptive `RuntimeError`s, consistent with the rest of `JiraClient`.
+
+* **Hardcoded internal Jira URLs removed from settings defaults.** `SettingsDialog` initialised both instance URL fields with specific corporate hostnames as fallback defaults. These have been replaced with empty strings; fields now start blank and are populated entirely from saved `QSettings` or user input.
+
 ### Improvements
+
+* **`_set_mode` legacy alias strings removed.** Two undocumented magic string aliases (`"ACyD"` → `MODE_PRIMARY` and `"sentinel"` → `MODE_SECONDARY`) were silently remapping mode values on entry to `_set_mode`. They had no call sites and no explanation in the codebase. Both have been removed; callers already pass `MODE_PRIMARY` or `MODE_SECONDARY` directly.
+
+* **`_adf_to_text` recursion depth capped at 50.** The method recursed through Atlassian Document Format node trees without a depth limit, leaving it vulnerable to a stack overflow on pathologically nested content. Added a `_depth` parameter that increments on each recursive call and returns an empty string beyond depth 50.
+
+* **`cell()` colour capture in `BulkCreateDialog._build_preview` made explicit.** The inner `cell()` function referenced `fg` from the enclosing loop scope rather than binding it at definition time. Changed the signature to `def cell(text, align=..., _fg=fg)` so the correct colour is captured regardless of when or how the function is called.
+
+* **`ACCENT_ORG` constant renamed to `ACCENT_ORANGE`.** The name was a truncation inconsistent with all other `ACCENT_*` colour constants. Renamed across all 10 call sites; no behaviour change.
+
+---
+
+## [2.11.7] — 2026-05-16
+
+### Bug Fixes
+
+* **`on_done` callback in `_refresh_users_cache` evaluated eagerly.** The tuple lambda `(self._busy(False), _show_dialog(members))` caused `_busy(False)` to fire immediately rather than after the fetch completed, leaving the progress bar in an incorrect state. Replaced with a named inner function that sequences the calls correctly.
+
+* **"Open in Jira" button remained enabled after project or instance change.** The button was not included in the `_clear_sprint_view` reset, leaving it active with no issue loaded. Now disabled alongside all other edit panel controls on clear.
+
+### Features
+
+* **Right-click context menu added to the story table.** Right-clicking any row now offers "Open in Jira", "Copy Key", "Copy Row", and "Copy Full Issue" without requiring the story to be loaded in the edit panel first.
+
+* **Persistent sprint label added to the story table header.** A label now shows the currently loaded project, board, and sprint above the story list, remaining visible while working in the edit panel so context is never lost.
+
+### Improvements
+
 * **Token expiry check now runs periodically.** Previously the check only ran on startup, meaning a token could expire silently during a long session. A `QTimer` now repeats the check every 4 hours while the app is open. 
 
 ---
