@@ -2676,9 +2676,6 @@ class MainWindow(QMainWindow):
     def _on_boards_load_error(self, key: str, e: str):
         self._status(f"⚠ Could not load boards for {key} (access restricted)")
 
-    def _on_assignees_load_error(self, e: str):
-        self._status("⚠ Could not load assignees (access restricted)")
-
     def _on_issue_types_load_error(self, key: str, e: str):
         self._status(f"⚠ Could not load issue types for {key} (access restricted)")
 
