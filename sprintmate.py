@@ -40,7 +40,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QColor, QPalette, QKeySequence, QShortcut
 )
-
+FIBONACCI = [0, 1, 2, 3, 5, 8, 13, 21]
 
 # ── Table column indices ──────────────────────────────────────────────────────
 COL_KEY         = 0
@@ -77,14 +77,14 @@ BORDER       = "#30363D"
 ACCENT_BLUE  = "#388BFD"
 ACCENT_CYAN  = "#39D5F5"
 ACCENT_GREEN = "#3FB950"
-ACCENT_ORG   = "#F78166"
+ACCENT_ORANGE   = "#F78166"
 TEXT_PRI     = "#E6EDF3"
 TEXT_SEC     = "#8B949E"
 TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.7"
+APP_VERSION  = "2.11.8"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -223,11 +223,11 @@ QPushButton#success:hover {{
 }}
 QPushButton#danger {{
     background-color: transparent;
-    color: {ACCENT_ORG};
-    border: 1px solid {ACCENT_ORG};
+    color: {ACCENT_ORANGE};
+    border: 1px solid {ACCENT_ORANGE};
 }}
 QPushButton#danger:hover {{
-    background-color: {ACCENT_ORG};
+    background-color: {ACCENT_ORANGE};
     color: #000000;
 }}
 QTableWidget {{
@@ -516,8 +516,10 @@ class JiraClient:
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode()).get("issues", [])
-        except Exception:
-            return []
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} [JQL search]: {e.read().decode(errors='replace')}")
+        except (urllib.error.URLError, OSError) as e:
+            raise RuntimeError(f"Network error [JQL search]: {e}")
 
     def get_issue_transitions(self, issue_key: str):
         return self._request("GET", f"issue/{issue_key}/transitions").get("transitions", [])
@@ -686,7 +688,6 @@ class NewStoryDialog(QDialog):
         form.addRow("Priority:", self.priority_combo)
 
         # Story points (Fibonacci) with amber warning for 13 and 21
-        FIBONACCI = [0, 1, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
         self.points_combo.addItem("— Not set —", None)
         for v in FIBONACCI:
@@ -849,7 +850,7 @@ class BulkCreateDialog(QDialog):
         layout.addWidget(self._table, 1)
 
         self._warn_lbl = QLabel("")
-        self._warn_lbl.setStyleSheet(f"color: {ACCENT_ORG}; font-size: 11px;")
+        self._warn_lbl.setStyleSheet(f"color: {ACCENT_ORANGE}; font-size: 11px;")
         self._warn_lbl.setWordWrap(True)
         layout.addWidget(self._warn_lbl)
 
@@ -959,11 +960,11 @@ class BulkCreateDialog(QDialog):
 
             is_valid = row["_valid"]
             has_warn = bool(row["_issues"])
-            fg = QColor(TEXT_PRI) if is_valid else QColor(ACCENT_ORG)
+            fg = QColor(TEXT_PRI) if is_valid else QColor(ACCENT_ORANGE)
 
-            def cell(text, align=Qt.AlignmentFlag.AlignLeft):
+            def cell(text, align=Qt.AlignmentFlag.AlignLeft, _fg=fg):
                 item = QTableWidgetItem(str(text))
-                item.setForeground(fg)
+                item.setForeground(_fg)
                 item.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
                 return item
 
@@ -978,7 +979,7 @@ class BulkCreateDialog(QDialog):
 
             if not is_valid:
                 status_item = QTableWidgetItem("✗  " + "; ".join(row["_issues"]))
-                status_item.setForeground(QColor(ACCENT_ORG))
+                status_item.setForeground(QColor(ACCENT_ORANGE))
             elif has_warn:
                 status_item = QTableWidgetItem("⚠  " + "; ".join(row["_issues"]))
                 status_item.setForeground(QColor("#E3B341"))
@@ -1113,7 +1114,7 @@ class ImportCommentsDialog(QDialog):
 
         if unmatched:
             warn = QLabel(f"⚠  {len(unmatched)} keys not found in current sprint will be skipped.")
-            warn.setStyleSheet(f"color: {ACCENT_ORG}; font-size: 11px;")
+            warn.setStyleSheet(f"color: {ACCENT_ORANGE}; font-size: 11px;")
             layout.addWidget(warn)
 
         btns = QDialogButtonBox(
@@ -1310,7 +1311,7 @@ class SettingsDialog(QDialog):
 
         self._data = {
             JiraClient.MODE_SECONDARY: {
-                "url":            settings.get("secondary_url", "https://jira.sde.sp.gc1.myngc.com/"),
+                "url":            settings.get("secondary_url", ""),
                 "token":          settings.get("secondary_token", ""),
                 "token_expiry":   settings.get("secondary_token_expiry", ""),
                 "default_project": settings.get("secondary_default_project", ""),
@@ -1319,7 +1320,7 @@ class SettingsDialog(QDialog):
                 "filter_boards":  settings.get("secondary_filter_boards", ""),
             },
             JiraClient.MODE_PRIMARY: {
-                "url":            settings.get("primary_url", "https://jira.northgrum.com/"),
+                "url":            settings.get("primary_url", ""),
                 "token":          settings.get("primary_token", ""),
                 "token_expiry":   settings.get("primary_token_expiry", ""),
                 "default_project": settings.get("primary_default_project", ""),
@@ -1331,11 +1332,6 @@ class SettingsDialog(QDialog):
         self._set_mode(settings.get("mode", JiraClient.MODE_SECONDARY))
 
     def _set_mode(self, mode: str):
-        if mode:
-            if mode.lower() == "ACyD".lower():
-                mode = JiraClient.MODE_PRIMARY
-            if mode.lower() == "sentinel":
-                mode = JiraClient.MODE_SECONDARY
         if hasattr(self, "_mode"):
             self._data[self._mode]["url"]   = self.url_edit.text().strip()
             self._data[self._mode]["token"] = self.token_edit.text().strip()
@@ -1382,7 +1378,7 @@ class SettingsDialog(QDialog):
     def _on_test_error(self, error: str):
         self.test_btn.setEnabled(True)
         self.status_lbl.setText(f"✗ {error[:100]}")
-        self.status_lbl.setStyleSheet(f"color: {ACCENT_ORG};")
+        self.status_lbl.setStyleSheet(f"color: {ACCENT_ORANGE};")
 
     def _save_and_accept(self):
         self._data[self._mode]["url"]   = self.url_edit.text().strip()
@@ -1501,7 +1497,6 @@ class StoryEditPanel(QFrame):
         form.addRow("Priority:", self.priority_combo)
 
         # Fibonacci story points with amber warning for 13 and 21
-        FIBONACCI = [0, 1, 3, 5, 8, 13, 21]
         self.points_combo = QComboBox()
         self.points_combo.addItem("— Not set —", None)
         for v in FIBONACCI:
@@ -1850,14 +1845,14 @@ class StoryEditPanel(QFrame):
         layout.addWidget(close_btn)
         dlg.exec()
 
-    def _adf_to_text(self, node: dict) -> str:
-        if not node:
+    def _adf_to_text(self, node: dict, _depth: int = 0) -> str:
+        if not node or _depth > 50:
             return ""
         parts = []
         if node.get("type") == "text":
             parts.append(node.get("text", ""))
         for child in node.get("content", []):
-            parts.append(self._adf_to_text(child))
+            parts.append(self._adf_to_text(child, _depth + 1))
             if child.get("type") in ("paragraph", "heading"):
                 parts.append("\n")
         return "".join(parts)
@@ -2861,7 +2856,7 @@ class MainWindow(QMainWindow):
             "In Progress": ACCENT_BLUE,
             "Done":        ACCENT_GREEN,
             "In Review":   ACCENT_CYAN,
-            "Blocked":     ACCENT_ORG,
+            "Blocked":     ACCENT_ORANGE,
         }
         sp_field = self._sp_field
         fl_field = self.edit_panel._fl_field
@@ -3576,6 +3571,11 @@ class MainWindow(QMainWindow):
         self._spawn(
             self._do_save, key, fields, comment, transition_id, target_sprint,
             on_result=lambda result: self._on_saved(key, result),
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"\u2717 Failed to save {key}."),
+                QMessageBox.critical(self, "Save Failed", str(e)),
+            ),
         )
 
     def _do_save(self, key, fields, comment, transition_id, target_sprint):
