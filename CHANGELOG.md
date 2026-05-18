@@ -1,4 +1,16 @@
 # SprintMate Changelog
+## [2.12.0] — 2026-05-18
+
+### Features
+
+* **CSV comment import now supports comma-separated keys in the key column.** Previously a CSV row could target at most two Jira keys via the separate key2 column. The key column now accepts any number of comma-separated keys (e.g. PROJECT1-123, PROJECT2-456, PROJECT3-789), each of which receives the comment. All keys are validated against the standard Jira key pattern; invalid tokens are silently skipped. The legacy key2 column (and its aliases key_2, second_key, other_key) continues to work as a fallback when only a single key appears in the key column, so existing CSVs require no changes.
+
+### Improvements
+
+* **Cross-post targets unified to a list throughout the import pipeline.** paired_key (a single string) has been replaced with paired_keys (a list) in the parsed entry dict for both the CSV and text/markdown parsers, making the data model consistent across formats. cross_map values are now lists of target keys rather than a single string, and _post_imported_comments iterates the list so a comment is posted to every explicit target. The import preview table and detail pane join the list with ", " for display.
+
+---
+
 ## [2.11.9] — 2026-05-18
 
 ### Bug Fixes
