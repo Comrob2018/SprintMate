@@ -17,7 +17,7 @@
 
 * **`ACCENT_ORG` constant renamed to `ACCENT_ORANGE`.** The name was a truncation inconsistent with all other `ACCENT_*` colour constants. Renamed across all 10 call sites; no behaviour change.
 
-* **Dead `_on_assignees_load_error` method removed.** The method was extracted alongside _on_boards_load_error and _on_issue_types_load_error in v2.11.6, but its call site in _refresh_users_cache was never updated from the original inline lambda, leaving it with no callers. Removed; the inline lambda on _refresh_users_cache remains the active error handler.
+* **Dead `_on_assignees_load_error` method removed.** The method was extracted alongside `_on_boards_load_error` and `_on_issue_types_load_error` in v2.11.6, but its call site in `_refresh_users_cache` was never updated from the original inline lambda, leaving it with no callers. Removed; the inline lambda on `_refresh_users_cache` remains the active error handler.
 ---
 
 ## [2.11.7] — 2026-05-16
