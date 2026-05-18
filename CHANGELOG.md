@@ -1,6 +1,6 @@
 # SprintMate Changelog
 ## [2.11.7] — 2026-05-16
-###Bug Fixes
+### Bug Fixes
 * **`on_done` callback in `_refresh_users_cache` evaluated eagerly.** The tuple lambda `(self._busy(False), _show_dialog(members))` caused `_busy(False)` to fire immediately rather than after the fetch completed, leaving the progress bar in an incorrect state. Replaced with a named inner function that sequences the calls correctly.
 * **"Open in Jira" button remained enabled after project or instance change.** The button was not included in the `_clear_sprint_view` reset, leaving it active with no issue loaded. Now disabled alongside all other edit panel controls on clear.
 ### Features
