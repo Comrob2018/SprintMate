@@ -93,7 +93,7 @@ The **▶ SAVE CHANGES** button is disabled until you make a change. Fields avai
 | **Feature Link** | URL or ID for the linked feature |
 | **Issue Type** | Loaded from the project's configured types |
 | **Priority** | Highest / High / Medium / Low / Lowest |
-| **Story Points** | Fibonacci dropdown: 0, 1, 3, 5, 8, 13, 21. Values 13 and 21 are highlighted in amber with a "consider splitting" label. |
+| **Story Points** | Fibonacci dropdown: 0, 1, 2, 3, 5, 8, 13, 21. Values 13 and 21 are highlighted in amber with a "consider splitting" label. |
 | **Sprint** | Move the story to a different sprint on save |
 | **Due Date** | Calendar picker; use Clear to remove |
 | **Status Transition** | Apply a workflow transition on save |
@@ -119,7 +119,7 @@ Click **▶ SAVE CHANGES** (or press `Ctrl+S`) — the app updates Jira and re-s
 
 Click **＋ New Story** (or press `Ctrl+N`) in the filter bar to open the creation dialog. Fill in summary (required), issue type, priority, story points, assignee, sprint, due date, and description, then click **＋ Create Story**.
 
-The story points dropdown includes: 0, 1, 3, 5, 8, 13, 21. Values 13 and 21 are highlighted in amber with a "consider splitting" label.
+The story points dropdown includes: 0, 1, 2, 3, 5, 8, 13, 21. Values 13 and 21 are highlighted in amber with a "consider splitting" label.
 
 ### Bulk-creating stories from CSV
 
