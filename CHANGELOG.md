@@ -7,7 +7,7 @@
 
 ### Improvements
 
-* **Cross-post targets unified to a list throughout the import pipeline.** paired_key (a single string) has been replaced with paired_keys (a list) in the parsed entry dict for both the CSV and text/markdown parsers, making the data model consistent across formats. cross_map values are now lists of target keys rather than a single string, and _post_imported_comments iterates the list so a comment is posted to every explicit target. The import preview table and detail pane join the list with ", " for display.
+* **Cross-post targets unified to a list throughout the import pipeline.** paired_key (a single string) has been replaced with paired_keys (a list) in the parsed entry dict for both the CSV and text/markdown parsers, making the data model consistent across formats. cross_map values are now lists of target keys rather than a single string, and `_post_imported_comments` iterates the list so a comment is posted to every explicit target. The import preview table and detail pane join the list with ", " for display.
 
 ---
 
