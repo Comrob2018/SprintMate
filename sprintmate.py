@@ -84,7 +84,15 @@ TEXT_DIM     = "#484F58"
 HOVER_BG     = "#21262D"
 SEL_BG       = "#1F3350"
 
-APP_VERSION  = "2.11.8"
+STATUS_COLORS = {
+    "To Do":       TEXT_SEC,
+    "In Progress": ACCENT_BLUE,
+    "Done":        ACCENT_GREEN,
+    "In Review":   ACCENT_CYAN,
+    "Blocked":     ACCENT_ORANGE,
+}
+
+APP_VERSION  = "2.11.9"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -2013,6 +2021,7 @@ class MainWindow(QMainWindow):
         self._issues = []
         self._workers = []
         self._users_cache: list = []
+        self._reselect_key: str | None = None
         self._sp_field = "customfield_10016"
         self._fl_field = "customfield_10100"
 
@@ -2796,6 +2805,11 @@ class MainWindow(QMainWindow):
         self._spawn(
             self._client.get_sprint_issues, bid, sid,
             on_result=self._on_issues_loaded,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Failed to load stories."),
+                QMessageBox.critical(self, "Load Failed", str(e)),
+            ),
         )
 
     def _on_issues_loaded(self, issues):
@@ -2813,7 +2827,7 @@ class MainWindow(QMainWindow):
         self.bulk_create_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
-        reselect = getattr(self, "_reselect_key", None)
+        reselect = self._reselect_key
         if reselect:
             for row in range(self.table.rowCount()):
                 item = self.table.item(row, 0)
@@ -2848,13 +2862,6 @@ class MainWindow(QMainWindow):
         self.search_edit.clear()
         self.search_edit.blockSignals(False)
 
-        status_colors = {
-            "To Do":       TEXT_SEC,
-            "In Progress": ACCENT_BLUE,
-            "Done":        ACCENT_GREEN,
-            "In Review":   ACCENT_CYAN,
-            "Blocked":     ACCENT_ORANGE,
-        }
         sp_field = self._sp_field
         fl_field = self.edit_panel._fl_field
 
@@ -2877,7 +2884,7 @@ class MainWindow(QMainWindow):
 
             status = f.get("status", {}).get("name", "")
             s_item = QTableWidgetItem(status)
-            s_item.setForeground(QColor(status_colors.get(status, TEXT_SEC)))
+            s_item.setForeground(QColor(STATUS_COLORS.get(status, TEXT_SEC)))
             s_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, COL_STATUS, s_item)
 
@@ -3086,16 +3093,19 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                raw = f.read()
-        except Exception as e:
-            QMessageBox.critical(self, "File Error", f"Could not read file:\n{e}")
-            return
-
         if path.lower().endswith(".csv"):
-            parsed = self._parse_comments_csv(path)
+            try:
+                parsed = self._parse_comments_csv(path)
+            except RuntimeError as e:
+                QMessageBox.critical(self, "File Error", str(e))
+                return
         else:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = f.read()
+            except Exception as e:
+                QMessageBox.critical(self, "File Error", f"Could not read file:\n{e}")
+                return
             parsed = self._parse_comments_file(raw)
         if not parsed:
             QMessageBox.warning(self, "No Entries Found",
@@ -3170,11 +3180,13 @@ class MainWindow(QMainWindow):
                 if file_assignee:
                     safe_assignee = _sanitise_jql(file_assignee)
                     jql += f' AND assignee = "{safe_assignee}"'
-                matches = other_client.search_issues_jql(jql, fields="summary,assignee")
-
-                if not matches:
-                    jql_exact = f'summary = "{safe_summary}"'
-                    matches = other_client.search_issues_jql(jql_exact, fields="summary,assignee")
+                try:
+                    matches = other_client.search_issues_jql(jql, fields="summary,assignee")
+                    if not matches:
+                        jql_exact = f'summary = "{safe_summary}"'
+                        matches = other_client.search_issues_jql(jql_exact, fields="summary,assignee")
+                except RuntimeError:
+                    matches = []
 
                 if matches:
                     best = _best_match(matches, file_summary, file_assignee)
@@ -3332,8 +3344,8 @@ class MainWindow(QMainWindow):
                             "assignee":   assignee,
                             "paired_key": key,
                         }
-        except Exception:
-            pass
+        except Exception as e:
+            raise RuntimeError(f"Could not read CSV file: {e}")
         return result
 
     def _post_imported_comments(self, comments: dict,
