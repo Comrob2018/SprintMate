@@ -1,4 +1,24 @@
 # SprintMate Changelog
+## [2.11.9] — 2026-05-18
+
+### Bug Fixes
+
+* **`_parse_comments_csv` no longer silently discards read errors.** A bare `except Exception: pass` meant any file permission error, encoding failure, or malformed CSV was indistinguishable from an empty file, causing the caller to show a misleading "no valid entries found" warning. The exception is now re-raised as a `RuntimeError` and the caller shows a specific "File Error" dialog with the underlying reason.
+
+* **`_load_sprint_issues` network and API failures now surface to the user.** The `_spawn` call had no `on_error` handler, so any exception from `get_sprint_issues` — HTTP error, network failure, or non-JSON response — fell through to the default worker error path without clearing the busy indicator. Added an explicit `on_error` handler consistent with all other spawn call sites in `MainWindow`.
+
+* **Cross-instance JQL search errors no longer crash the comment import flow.** `_import_comments` called `other_client.search_issues_jql` directly in the main thread without error handling. Since `search_issues_jql` now raises on HTTP and network failures, any connectivity issue with the other instance would abort the entire import. Both the fuzzy and exact-match calls are now wrapped in a `try/except RuntimeError` that falls back to an empty match list, allowing the import to continue with unmatched entries skipped.
+
+### Improvements
+
+* **`STATUS_COLORS` extracted to a module-level constant.** The status-to-colour mapping was defined as a local dict inside `_populate_table` and rebuilt on every sprint load. Moved to module level alongside `FIBONACCI` and the other colour globals; no behaviour change.
+
+* **`_reselect_key` initialised in `__init__`.** The attribute was set ad-hoc in `_load_sprint_issues` and accessed via `getattr(self, "_reselect_key", None)` in `_on_issues_loaded`. It is now declared in `__init__` with the other instance variables, and the `getattr` fallback replaced with a direct attribute access.
+
+* **CSV comment files no longer opened twice.** `_import_comments` previously read the entire file into a string before branching on extension, leaving the read result unused for CSV paths (which `_parse_comments_csv` re-opened by path internally). The two branches now each handle their own file I/O independently, eliminating the redundant read.
+
+---
+
 ## [2.11.8] — 2026-05-18
 
 ### Bug Fixes
@@ -18,6 +38,7 @@
 * **`ACCENT_ORG` constant renamed to `ACCENT_ORANGE`.** The name was a truncation inconsistent with all other `ACCENT_*` colour constants. Renamed across all 10 call sites; no behaviour change.
 
 * **Dead `_on_assignees_load_error` method removed.** The method was extracted alongside `_on_boards_load_error` and `_on_issue_types_load_error` in v2.11.6, but its call site in `_refresh_users_cache` was never updated from the original inline lambda, leaving it with no callers. Removed; the inline lambda on `_refresh_users_cache` remains the active error handler.
+
 ---
 
 ## [2.11.7] — 2026-05-16
