@@ -11,8 +11,6 @@
 
 ### Improvements
 
-* **`_set_mode` legacy alias strings removed.** Two undocumented magic string aliases (`"ACyD"` → `MODE_PRIMARY` and `"sentinel"` → `MODE_SECONDARY`) were silently remapping mode values on entry to `_set_mode`. They had no call sites and no explanation in the codebase. Both have been removed; callers already pass `MODE_PRIMARY` or `MODE_SECONDARY` directly.
-
 * **`_adf_to_text` recursion depth capped at 50.** The method recursed through Atlassian Document Format node trees without a depth limit, leaving it vulnerable to a stack overflow on pathologically nested content. Added a `_depth` parameter that increments on each recursive call and returns an empty string beyond depth 50.
 
 * **`cell()` colour capture in `BulkCreateDialog._build_preview` made explicit.** The inner `cell()` function referenced `fg` from the enclosing loop scope rather than binding it at definition time. Changed the signature to `def cell(text, align=..., _fg=fg)` so the correct colour is captured regardless of when or how the function is called.
