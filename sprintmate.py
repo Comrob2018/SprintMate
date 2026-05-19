@@ -40,7 +40,8 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QColor, QPalette, QKeySequence, QShortcut
 )
-FIBONACCI = [0, 1, 2, 3, 5, 8, 13, 21]
+FIBONACCI   = [0, 1, 2, 3, 5, 8, 13, 21]
+PRIORITIES  = ["Highest", "High", "Medium", "Low", "Lowest"]
 
 # ── Table column indices ──────────────────────────────────────────────────────
 COL_KEY         = 0
@@ -92,7 +93,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.12.0"
+APP_VERSION  = "2.12.1"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -691,7 +692,7 @@ class NewStoryDialog(QDialog):
         form.addRow("Issue Type:", self.type_combo)
 
         self.priority_combo = QComboBox()
-        for p in ["Medium", "Highest", "High", "Low", "Lowest"]:
+        for p in PRIORITIES:
             self.priority_combo.addItem(p, p)
         form.addRow("Priority:", self.priority_combo)
 
@@ -891,8 +892,7 @@ class BulkCreateDialog(QDialog):
             itype = {"name": "", "id": ""}
 
         raw_pri = raw.get("priority", "").strip()
-        valid_priorities = {"Highest", "High", "Medium", "Low", "Lowest"}
-        if raw_pri and raw_pri in valid_priorities:
+        if raw_pri and raw_pri in PRIORITIES:
             priority = raw_pri
         else:
             priority = "Medium"
@@ -1435,6 +1435,8 @@ class StoryEditPanel(QFrame):
         self._transitions = []
         self._current_sprint_id = None
         self._snapshot = {}
+        self._pending_assignee = None
+        self._full_comment_text = ""
         self._sp_field = "customfield_10016"
         self._fl_field = "customfield_10100"
         self._base_url = ""
@@ -1494,16 +1496,9 @@ class StoryEditPanel(QFrame):
         form.addRow("Issue Type:", self.issuetype_combo)
 
         self.priority_combo = QComboBox()
-        PRIORITIES = [
-            ("— Keep current —", None),
-            ("Highest", "Highest"),
-            ("High", "High"),
-            ("Medium", "Medium"),
-            ("Low", "Low"),
-            ("Lowest", "Lowest"),
-        ]
-        for label, val in PRIORITIES:
-            self.priority_combo.addItem(label, val)
+        self.priority_combo.addItem("— Keep current —", None)
+        for p in PRIORITIES:
+            self.priority_combo.addItem(p, p)
         form.addRow("Priority:", self.priority_combo)
 
         # Fibonacci story points with amber warning for 13 and 21
@@ -1657,7 +1652,7 @@ class StoryEditPanel(QFrame):
             display = m.get("displayName") or m.get("name") or "?"
             self.assignee_combo.addItem(display, uid)
 
-        if getattr(self, "_pending_assignee", None):
+        if self._pending_assignee:
             found = False
             for i in range(self.assignee_combo.count()):
                 if self.assignee_combo.itemData(i) == self._pending_assignee:
@@ -1832,7 +1827,7 @@ class StoryEditPanel(QFrame):
             QTimer.singleShot(1500, lambda: self.copy_key_btn.setText("⎘"))
 
     def _expand_comment(self):
-        full_text = self._full_comment_text if hasattr(self, "_full_comment_text") else ""
+        full_text = self._full_comment_text
         if not full_text:
             return
         dlg = QDialog(self)
@@ -3167,6 +3162,7 @@ class MainWindow(QMainWindow):
         if other_client:
             for key, entry in parsed.items():
                 paired_keys = entry.get("paired_keys") or []
+                # Filter to keys that are explicitly provided and not on the active instance
                 explicit = [p for p in paired_keys if p in parsed and p not in loaded_keys]
                 if explicit:
                     if key in loaded_keys:
@@ -3353,7 +3349,6 @@ class MainWindow(QMainWindow):
                             "assignee":    assignee,
                             "paired_keys": [k for k in all_keys if k != key],
                         }
-
         except Exception as e:
             raise RuntimeError(f"Could not read CSV file: {e}")
         return result
