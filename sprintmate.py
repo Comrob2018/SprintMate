@@ -95,7 +95,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.13.1"
+APP_VERSION  = "2.13.2"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
 )
