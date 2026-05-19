@@ -1,10 +1,12 @@
 # SprintMate Changelog
 ## [2.13.1] — 2026-05-19
 ### Features
-* **Check for Updates via Help menu.** A native Help menu has been added to the menu bar containing “Check for Updates…” and “About SprintMate”. The update check fetches the raw script from the URL defined in GITHUB_RAW_URL, reads it line-by-line until it finds the APP_VERSION assignment, and compares it against the running version — without loading the full file into memory. The fetch runs in a background thread via the existing _spawn mechanism so the UI never blocks. If a newer version is found, a dialog prompts the user to open the repository page in their browser; the repo URL is derived automatically from GITHUB_RAW_URL by replacing raw.githubusercontent.com with github.com.
+* **Check for Updates via Help menu.** A native Help menu has been added to the menu bar containing `“Check for Updates…”` and `“About SprintMate”`. The update check fetches the raw script from the URL defined in `GITHUB_RAW_URL`, reads it line-by-line until it finds the APP_VERSION assignment, and compares it against the running version — without loading the full file into memory. The fetch runs in a background thread via the existing _spawn mechanism so the UI never blocks. If a newer version is found, a dialog prompts the user to open the repository page in their browser; the repo URL is derived automatically from `GITHUB_RAW_URL` by replacing raw.githubusercontent.com with github.com.
 * **Two-row filter bar.** The single filter bar row has been split into two. Row 1 contains the board/sprint selection controls (PROJECT, BOARD, SPRINT, Load Stories, COMPARE). Row 2 contains the action buttons (＋ New Story, ＋＋ Bulk Create, 📄 Import, ⬇ Export) on the left and the ASSIGNEE filter and text search on the right. Both rows share the same horizontal padding. The fb_layout QHBoxLayout has been replaced with a QVBoxLayout (fb_outer) containing two QHBoxLayout children (fb_row1, fb_row2).
 ### Improvements
-* **GITHUB_RAW_URL module-level constant.** The remote URL used for update checks is defined as a single constant near APP_VERSION, making it straightforward to update when the repository is moved or renamed without searching through method bodies.
+* **`GITHUB_RAW_URL` module-level constant.** The remote URL used for update checks is defined as a single constant near `APP_VERSION`, making it straightforward to update when the repository is moved or renamed without searching through method bodies.
+
+---
 
 ## [2.13.0] — 2026-05-18
 ### Features
@@ -21,6 +23,8 @@
 * **Due date warning highlights.** Overdue due dates are shown in ACCENT_ORANGE with an "Overdue by X day(s)" tooltip; dates within three days are shown in amber (#E3B341) with a "Due in X day(s)" tooltip. Applied at populate time using the existing date import.
 * **Assignee filter dropdown.** An ASSIGNEE combo in the filter bar restricts the table to a single assignee's stories. The list is built from the loaded sprint on every load, resets when the sprint view is cleared, and is ANDed with the existing text search so both filters can be active simultaneously. _filter_table updated to respect the assignee selection.
 Remember last sprint per board. The selected sprint ID is written to QSettings as last_sprint_{board_id} when stories are loaded and restored automatically the next time sprints are loaded for the same board.
+
+---
 
 ## [2.12.1] - 2026-05-18
 
