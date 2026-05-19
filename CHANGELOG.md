@@ -1,4 +1,15 @@
 # SprintMate Changelog
+## [2.13.2] — 2026‑05‑19
+### Bug Fixes
+* **Fixed row‑change handling errors.** The previous implementation connected to a non‑existent `currentRowChanged` signal and processed the wrong argument types, resulting in AttributeError and TypeError. The slot now receives the correct QModelIndex objects, extracts row numbers safely, and prevents invalid‑index crashes.
+### Features
+* **Added previous‑row tracking.** Initialized `_current_row` and `_previous_row` attributes before the signal connection and updated them on each selection change. This makes it possible to react to both the newly selected row and the row that was selected before.
+### Improvements
+* **Enhanced slot robustness and API clarity.** The `_on_row_changed` method signature now matches the signal (`(current, previous)`), includes validity checks (`isValid()`), and stores row indices as integers. This improves code readability and reduces the risk of future type‑related bugs.
+* **Streamlined signal connection.** Utilized a lambda wrapper to forward only the needed row numbers, keeping the rest of the dialog logic unchanged while still providing access to the previous row when needed.
+
+---
+
 ## [2.13.1] — 2026-05-19
 ### Features
 * **Check for Updates via Help menu.** A native Help menu has been added to the menu bar containing `“Check for Updates…”` and `“About SprintMate”`. The update check fetches the raw script from the URL defined in `GITHUB_RAW_URL`, reads it line-by-line until it finds the APP_VERSION assignment, and compares it against the running version — without loading the full file into memory. The fetch runs in a background thread via the existing _spawn mechanism so the UI never blocks. If a newer version is found, a dialog prompts the user to open the repository page in their browser; the repo URL is derived automatically from `GITHUB_RAW_URL` by replacing raw.githubusercontent.com with github.com.
