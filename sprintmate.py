@@ -42,6 +42,7 @@ from PyQt6.QtGui import (
 )
 FIBONACCI   = [0, 1, 2, 3, 5, 8, 13, 21]
 PRIORITIES  = ["Highest", "High", "Medium", "Low", "Lowest"]
+COMMENT_TEMPLATES = ["Blocked by: ", "Ready for review.", "Carried to next sprint.", "In progress — ETA: ", "Merged to main."]
 
 # ── Table column indices ──────────────────────────────────────────────────────
 COL_KEY         = 0
@@ -93,7 +94,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.12.1"
+APP_VERSION  = "2.13.0"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -1575,6 +1576,14 @@ class StoryEditPanel(QFrame):
         # ── Comment ───────────────────────────────────────────────────────────
         grp_comment = QGroupBox("ADD COMMENT")
         comment_layout = QVBoxLayout(grp_comment)
+        _tr = QHBoxLayout()
+        _tl = QLabel("Template:"); _tl.setObjectName("dim"); _tr.addWidget(_tl)
+        self.comment_template_combo = QComboBox()
+        self.comment_template_combo.addItem("— select —", None)
+        for _t in COMMENT_TEMPLATES: self.comment_template_combo.addItem(_t, _t)
+        self.comment_template_combo.currentIndexChanged.connect(self._apply_comment_template)
+        _tr.addWidget(self.comment_template_combo, 1)
+        comment_layout.addLayout(_tr)
         self.comment_edit = QTextEdit()
         self.comment_edit.setPlaceholderText("Type a comment to post…")
         self.comment_edit.setMaximumHeight(80)
@@ -1601,6 +1610,18 @@ class StoryEditPanel(QFrame):
         self.transition_combo.currentIndexChanged.connect(self._check_dirty)
         self.desc_edit.textChanged.connect(self._check_dirty)
         self.comment_edit.textChanged.connect(self._check_dirty)
+
+    def _apply_comment_template(self, index: int):
+        text = self.comment_template_combo.itemData(index)
+        if not text: return
+        self.comment_edit.setPlainText(text)
+        self.comment_edit.setFocus()
+        cur = self.comment_edit.textCursor()
+        cur.movePosition(cur.MoveOperation.End)
+        self.comment_edit.setTextCursor(cur)
+        self.comment_template_combo.blockSignals(True)
+        self.comment_template_combo.setCurrentIndex(0)
+        self.comment_template_combo.blockSignals(False)
 
     def _open_in_jira(self):
         if self.current_key and self._base_url:
@@ -1697,6 +1718,8 @@ class StoryEditPanel(QFrame):
         finally:
             for w in _tracked:
                 w.blockSignals(False)
+        self._pre_save_snapshot = None
+        self.undo_btn.setEnabled(False)
         self._snapshot = self._snapshot_state()
         self.save_btn.setEnabled(False)
         self.save_btn.setToolTip("No changes to save")
@@ -2106,6 +2129,20 @@ class MainWindow(QMainWindow):
         """)
         root.addWidget(self.progress)
 
+        self.expiry_banner = QFrame()
+        self.expiry_banner.setVisible(False)
+        self.expiry_banner.setStyleSheet(f"background: #5A3E00; border-bottom: 1px solid {ACCENT_ORANGE};")
+        _bl = QHBoxLayout(self.expiry_banner)
+        _bl.setContentsMargins(20, 6, 12, 6)
+        self.expiry_banner_lbl = QLabel("")
+        self.expiry_banner_lbl.setStyleSheet(f"color: {ACCENT_ORANGE}; font-size: 12px;")
+        _bl.addWidget(self.expiry_banner_lbl, 1)
+        _db = QPushButton("✕")
+        _db.setFixedSize(20, 20); _db.setObjectName("dim")
+        _db.clicked.connect(lambda: self.expiry_banner.setVisible(False))
+        _bl.addWidget(_db)
+        root.addWidget(self.expiry_banner)
+
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setVisible(False)
@@ -2148,6 +2185,18 @@ class MainWindow(QMainWindow):
         self.load_btn.setEnabled(False)
         fb_layout.addWidget(self.load_btn)
 
+        fb_layout.addWidget(QLabel("COMPARE"))
+        self.compare_combo = QComboBox()
+        self.compare_combo.setMinimumWidth(200)
+        self.compare_combo.setEnabled(False)
+        self.compare_combo.setToolTip("Select a sprint to compare against")
+        fb_layout.addWidget(self.compare_combo)
+        self.compare_btn = QPushButton("⇆  Compare")
+        self.compare_btn.setObjectName("toolbar_btn")
+        self.compare_btn.setEnabled(False)
+        self.compare_btn.clicked.connect(self._compare_sprints)
+        fb_layout.addWidget(self.compare_btn)
+
         self.new_story_btn = QPushButton("＋  New Story")
         self.new_story_btn.setObjectName("toolbar_btn")
         self.new_story_btn.clicked.connect(self._open_new_story)
@@ -2174,6 +2223,13 @@ class MainWindow(QMainWindow):
         fb_layout.addWidget(self.export_btn)
         fb_layout.addStretch()
 
+        fb_layout.addWidget(QLabel("ASSIGNEE"))
+        self.assignee_filter_combo = QComboBox()
+        self.assignee_filter_combo.setMinimumWidth(140)
+        self.assignee_filter_combo.setEnabled(False)
+        self.assignee_filter_combo.setToolTip("Filter by assignee")
+        self.assignee_filter_combo.currentIndexChanged.connect(self._apply_assignee_filter)
+        fb_layout.addWidget(self.assignee_filter_combo)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Filter stories…")
         self.search_edit.textChanged.connect(self._filter_table)
@@ -2193,6 +2249,12 @@ class MainWindow(QMainWindow):
         self.story_count_lbl = QLabel("No stories loaded")
         self.story_count_lbl.setObjectName("dim")
         count_row.addWidget(self.story_count_lbl)
+        count_row.addStretch()
+        self.velocity_lbl = QLabel("")
+        self.velocity_lbl.setObjectName("dim")
+        self.velocity_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        count_row.addWidget(self.velocity_lbl)
+        count_row.addStretch()
         # ── Persistent sprint label ───────────────────────────────────────────
         self.sprint_lbl = QLabel("")
         self.sprint_lbl.setObjectName("dim")
@@ -2232,6 +2294,17 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self._show_row_context_menu)
         self._apply_default_columns()
         left_layout.addWidget(self.table)
+
+        quick_bar = QFrame()
+        quick_bar.setStyleSheet(f"background: {PANEL_BG}; border-top: 1px solid {BORDER};")
+        _qbl = QHBoxLayout(quick_bar)
+        _qbl.setContentsMargins(8, 4, 8, 4)
+        self.quick_add_edit = QLineEdit()
+        self.quick_add_edit.setPlaceholderText("＋ Quick-add story summary… (Enter to create)")
+        self.quick_add_edit.setEnabled(False)
+        self.quick_add_edit.returnPressed.connect(self._quick_add_story)
+        _qbl.addWidget(self.quick_add_edit)
+        left_layout.addWidget(quick_bar)
 
         splitter.addWidget(left)
 
@@ -2285,6 +2358,15 @@ class MainWindow(QMainWindow):
         )
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(
             self._copy_row_full
+        )
+        QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(
+            lambda: self._navigate_story(-1)
+        )
+        QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(
+            lambda: self._navigate_story(1)
+        )
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(
+            self._copy_row_markdown
         )
 
     def _selected_issue(self):
@@ -2367,6 +2449,37 @@ class MainWindow(QMainWindow):
         self._status("✓ Full issue copied to clipboard.")
 
     # ── Row context menu ──────────────────────────────────────────────────────
+    def _navigate_story(self, delta: int):
+        visible = [r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)]
+        if not visible: return
+        current = self.table.currentRow()
+        if current not in visible:
+            next_row = visible[0] if delta > 0 else visible[-1]
+        else:
+            idx = visible.index(current)
+            next_row = visible[max(0, min(len(visible)-1, idx+delta))]
+        self.table.selectRow(next_row)
+        self.table.scrollTo(self.table.model().index(next_row, 0))
+
+    def _copy_row_markdown(self):
+        issue = self._selected_issue()
+        if not issue: return
+        sp = self._sp_field
+        f  = issue.get("fields", {})
+        key      = issue["key"]
+        summary  = f.get("summary", "")
+        assignee = (f.get("assignee") or {}).get("displayName", "—")
+        status   = (f.get("status") or {}).get("name", "—")
+        pts_raw  = f.get(sp) or f.get("customfield_10016")
+        try:
+            pts = str(int(float(pts_raw))) if pts_raw is not None else "—"
+        except (TypeError, ValueError):
+            pts = "—"
+        base_url = self.edit_panel._base_url
+        key_md = f"[{key}]({base_url}/browse/{key})" if base_url else key
+        QApplication.clipboard().setText(f"| {key_md} | {summary} | {assignee} | {status} | {pts} |")
+        self._status("✓ Row copied as Markdown.")
+
     def _show_row_context_menu(self, pos):
         row = self.table.rowAt(pos.y())
         if row < 0:
@@ -2382,6 +2495,9 @@ class MainWindow(QMainWindow):
         copy_row     = menu.addAction("⎘  Copy Row")
         menu.addSeparator()
         copy_full    = menu.addAction("⎘  Copy Full Issue")
+        copy_md      = menu.addAction("⎘  Copy as Markdown")
+        menu.addSeparator()
+        duplicate    = menu.addAction("⧉  Duplicate Story")
 
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == open_action:
@@ -2396,6 +2512,11 @@ class MainWindow(QMainWindow):
         elif chosen == copy_full:
             self.table.selectRow(row)
             self._copy_row_full()
+        elif chosen == copy_md:
+            self.table.selectRow(row)
+            self._copy_row_markdown()
+        elif chosen == duplicate:
+            self._duplicate_story(key)
 
     # ── Token storage ─────────────────────────────────────────────────────────
     @staticmethod
@@ -2439,6 +2560,7 @@ class MainWindow(QMainWindow):
 
         self.table.setRowCount(0)
         self.story_count_lbl.setText("No stories loaded")
+        self.velocity_lbl.setText("")
         self.sprint_lbl.setText("")
         self._issues = []
         self._users_cache = []
@@ -2446,6 +2568,13 @@ class MainWindow(QMainWindow):
 
         self.export_btn.setEnabled(False)
         self.bulk_create_btn.setEnabled(False)
+        self.quick_add_edit.setEnabled(False)
+        self.quick_add_edit.clear()
+        self.compare_combo.setEnabled(False)
+        self.compare_combo.clear()
+        self.compare_btn.setEnabled(False)
+        self.assignee_filter_combo.setEnabled(False)
+        self.assignee_filter_combo.clear()
         self.edit_panel.current_key = None
         self.edit_panel.title_lbl.setText("Select a story to edit")
         self.edit_panel.key_lbl.setText("")
@@ -2515,7 +2644,12 @@ class MainWindow(QMainWindow):
             except ValueError:
                 pass
         if warnings:
-            self._status("  |  ".join(warnings))
+            msg = "  |  ".join(warnings)
+            self._status(msg)
+            self.expiry_banner_lbl.setText(msg)
+            self.expiry_banner.setVisible(True)
+        else:
+            self.expiry_banner.setVisible(False)
 
     # ── Settings ──────────────────────────────────────────────────────────────
     def _cancel_workers(self):
@@ -2775,6 +2909,19 @@ class MainWindow(QMainWindow):
                 font.setBold(True)
                 self.sprint_combo.setItemData(idx, font, Qt.ItemDataRole.FontRole)
         self._status(f"Loaded {len(sprints)} sprints.")
+        self.compare_combo.clear()
+        self.compare_combo.addItem("— select sprint —", None)
+        for s in sprints:
+            self.compare_combo.addItem(f"[{s.get('state','').upper()}] {s['name']}", s['id'])
+        self.compare_combo.setEnabled(True)
+        self.compare_btn.setEnabled(True)
+        bid = self.board_combo.currentData()
+        if bid:
+            last_sid = QSettings("SprintMate","SprintMate").value(f"last_sprint_{bid}")
+            if last_sid:
+                for i in range(self.sprint_combo.count()):
+                    if str(self.sprint_combo.itemData(i)) == str(last_sid):
+                        self.sprint_combo.setCurrentIndex(i); break
         self.edit_panel.set_sprints(sprints)
 
     def _load_sprint_issues(self, reselect_key: str = None):
@@ -2794,6 +2941,10 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
         self._reselect_key = reselect_key or self.edit_panel.current_key
+        bid_save = self.board_combo.currentData()
+        sid_save = self.sprint_combo.currentData()
+        if bid_save and sid_save:
+            QSettings("SprintMate", "SprintMate").setValue(f"last_sprint_{bid_save}", sid_save)
         mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
         mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
         sprint_label = self.sprint_combo.currentText()
@@ -2815,6 +2966,9 @@ class MainWindow(QMainWindow):
         self._populate_table(issues)
         self._status(f"Loaded {len(issues)} stories.")
         self.story_count_lbl.setText(f"{len(issues)} stories")
+        self._update_velocity_bar()
+        self._populate_assignee_filter()
+        self._populate_assignee_filter()
         # Update persistent sprint label
         project = self.project_combo.currentText().split("—")[0].strip()
         board   = self.board_combo.currentText()
@@ -2824,6 +2978,7 @@ class MainWindow(QMainWindow):
         self.bulk_create_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
+        self.quick_add_edit.setEnabled(True)
         reselect = self._reselect_key
         if reselect:
             for row in range(self.table.rowCount()):
@@ -2833,6 +2988,54 @@ class MainWindow(QMainWindow):
                     self.table.scrollToItem(item)
                     break
             self._reselect_key = None
+
+    def _populate_assignee_filter(self):
+        self.assignee_filter_combo.blockSignals(True)
+        self.assignee_filter_combo.clear()
+        self.assignee_filter_combo.addItem("All assignees", None)
+        seen = set()
+        for iss in self._issues:
+            a = (iss.get("fields", {}).get("assignee") or {})
+            name = a.get("displayName") or a.get("name") or ""
+            if name and name not in seen:
+                seen.add(name)
+                self.assignee_filter_combo.addItem(name, name)
+        self.assignee_filter_combo.blockSignals(False)
+        self.assignee_filter_combo.setEnabled(True)
+
+    def _apply_assignee_filter(self):
+        selected = self.assignee_filter_combo.currentData()
+        term = self.search_edit.text().lower()
+        for row in range(self.table.rowCount()):
+            a_item = self.table.item(row, COL_ASSIGNEE)
+            a_match = selected is None or (a_item and a_item.text() == selected)
+            t_match = not term or any(
+                term in (self.table.item(row, c).text().lower() if self.table.item(row, c) else "")
+                for c in range(self.table.columnCount()))
+            self.table.setRowHidden(row, not (a_match and t_match))
+
+    def _update_velocity_bar(self):
+        if not self._issues:
+            self.velocity_lbl.setText("")
+            return
+        total_pts = done_pts = in_prog = done_cnt = 0
+        sp = self._sp_field
+        for iss in self._issues:
+            f = iss.get("fields", {})
+            status = (f.get("status") or {}).get("name", "")
+            pts_raw = f.get(sp) or f.get("customfield_10016") or f.get("story_points")
+            try:
+                pts = int(float(pts_raw)) if pts_raw is not None else 0
+            except (TypeError, ValueError):
+                pts = 0
+            total_pts += pts
+            if status == "Done":
+                done_pts += pts; done_cnt += 1
+            elif status == "In Progress":
+                in_prog += 1
+        self.velocity_lbl.setText(
+            f"{total_pts} pts total  ·  {in_prog} in progress  ·  {done_cnt} done ({done_pts} pts)"
+        )
 
     def _apply_default_columns(self):
         for col, _ in COLS_TOGGLABLE:
@@ -2858,6 +3061,9 @@ class MainWindow(QMainWindow):
         self.search_edit.blockSignals(True)
         self.search_edit.clear()
         self.search_edit.blockSignals(False)
+        self.assignee_filter_combo.blockSignals(True)
+        self.assignee_filter_combo.clear()
+        self.assignee_filter_combo.blockSignals(False)
 
         sp_field = self._sp_field
         fl_field = self.edit_panel._fl_field
@@ -2888,6 +3094,17 @@ class MainWindow(QMainWindow):
             due = f.get("duedate", "") or ""
             due_item = QTableWidgetItem(due[:10] if due else "—")
             due_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if due:
+                try:
+                    _dl = (date.fromisoformat(due[:10]) - date.today()).days
+                    if _dl < 0:
+                        due_item.setForeground(QColor(ACCENT_ORANGE))
+                        due_item.setToolTip(f"Overdue by {abs(_dl)} day(s)")
+                    elif _dl <= 3:
+                        due_item.setForeground(QColor("#E3B341"))
+                        due_item.setToolTip(f"Due in {_dl} day(s)")
+                except ValueError:
+                    pass
             self.table.setItem(row, COL_DUE_DATE, due_item)
 
             pts = f.get(sp_field) or f.get("customfield_10016") or f.get("story_points") or ""
@@ -2917,20 +3134,23 @@ class MainWindow(QMainWindow):
 
     def _filter_table(self, text: str):
         term = text.lower()
+        selected_assignee = self.assignee_filter_combo.currentData()
         highlight_bg = QColor(ACCENT_BLUE).darker(180)
         for row in range(self.table.rowCount()):
             row_matches = False
             for col in range(self.table.columnCount()):
                 item = self.table.item(row, col)
-                if not item:
-                    continue
+                if not item: continue
                 cell_text = item.text().lower()
                 if term and term in cell_text:
                     row_matches = True
                     item.setBackground(highlight_bg)
                 else:
                     item.setBackground(QColor(0, 0, 0, 0))
-            self.table.setRowHidden(row, bool(term) and not row_matches)
+            text_hidden = bool(term) and not row_matches
+            a_item = self.table.item(row, COL_ASSIGNEE)
+            a_hidden = selected_assignee is not None and (not a_item or a_item.text() != selected_assignee)
+            self.table.setRowHidden(row, text_hidden or a_hidden)
 
     def _on_story_selected(self):
         rows = self.table.selectedItems()
@@ -3629,6 +3849,124 @@ class MainWindow(QMainWindow):
         self.edit_panel.save_btn.setEnabled(False)
         self.edit_panel.save_btn.setToolTip("No changes to save")
         self._load_sprint_issues(reselect_key=key)
+
+    def _compare_sprints(self):
+        cid = self.compare_combo.currentData()
+        bid = self.board_combo.currentData()
+        if cid is None or not self._issues or not self._client:
+            QMessageBox.information(self, "Compare Sprints", "Load a sprint first, then select one to compare.")
+            return
+        self._busy(True)
+        self._status("Loading comparison sprint…")
+        self._spawn(self._client.get_sprint_issues, bid, cid,
+            on_result=self._on_compare_loaded,
+            on_error=lambda e: (self._busy(False), self._status("✗ Compare failed."),
+                QMessageBox.critical(self, "Compare Failed", str(e))))
+
+    def _on_compare_loaded(self, compare_issues):
+        self._busy(False)
+        sp = self._sp_field
+        cmap = {i["key"]: i for i in compare_issues}
+        curmap = {i["key"]: i for i in self._issues}
+        moved_bg = QColor("#1A3A1A"); changed_bg = QColor("#1A2A3A")
+        def _fld(iss, *path):
+            obj = iss.get("fields") or {}
+            for p in path: obj = (obj or {}).get(p) or {}
+            return obj if isinstance(obj, str) else ""
+        n_new = n_changed = 0
+        for row in range(self.table.rowCount()):
+            ki = self.table.item(row, 0)
+            if not ki: continue
+            key = ki.text()
+            if key not in cmap:
+                for col in range(self.table.columnCount()):
+                    it = self.table.item(row, col)
+                    if it: it.setBackground(moved_bg)
+                n_new += 1
+            else:
+                curr, prev = curmap[key], cmap[key]
+                diffs = []
+                for lbl, *path in [("status","status","name"),("assignee","assignee","displayName")]:
+                    cv, pv = _fld(curr, *path), _fld(prev, *path)
+                    if cv != pv: diffs.append(f"{lbl}: {pv or '—'} → {cv or '—'}")
+                try:
+                    _cv = (curr.get("fields") or {}).get(sp)
+                    _pv = (prev.get("fields") or {}).get(sp)
+                    cp = int(float(_cv)) if _cv is not None else None
+                    pp = int(float(_pv)) if _pv is not None else None
+                except (TypeError, ValueError): cp = pp = None
+                if cp != pp: diffs.append(f"pts: {pp} → {cp}")
+                if diffs:
+                    for col in range(self.table.columnCount()):
+                        it = self.table.item(row, col)
+                        if it: it.setBackground(changed_bg)
+                    ki.setToolTip("\n".join(diffs))
+                    n_changed += 1
+        n_removed = sum(1 for k in cmap if k not in curmap)
+        self._status(f"Compare vs {self.compare_combo.currentText()}: {n_new} added, {n_removed} removed, {n_changed} changed. Hover KEY for details.")
+
+    def _duplicate_story(self, key: str):
+        issue = next((i for i in self._issues if i["key"] == key), None)
+        if not issue: return
+        f = issue.get("fields", {}); sp = self._sp_field
+        summary   = f.get("summary", "") + " (copy)"
+        issuetype = (f.get("issuetype") or {}).get("id")
+        priority  = (f.get("priority") or {}).get("name", "")
+        pts_raw   = f.get(sp) or f.get("customfield_10016")
+        try: pts = int(float(pts_raw)) if pts_raw is not None else None
+        except (TypeError, ValueError): pts = None
+        aobj = f.get("assignee") or {}
+        aid  = aobj.get("name") or aobj.get("accountId")
+        desc = f.get("description") or ""
+        if isinstance(desc, dict): desc = self.edit_panel._adf_to_text(desc).strip()
+        self._busy(True)
+        self._status(f"Duplicating {key}…")
+        self._spawn(self._client.create_issue,
+            self.project_combo.currentData(), summary, issuetype, desc, aid,
+            priority, pts, self.sprint_combo.currentData(), (f.get("duedate") or "")[:10] or None,
+            on_result=lambda r: self._on_duplicate_done(r, key),
+            on_error=lambda e: (self._busy(False), self._status("✗ Duplicate failed."),
+                QMessageBox.critical(self, "Duplicate Failed", str(e))))
+
+    def _on_duplicate_done(self, result, source_key: str):
+        self._busy(False)
+        new_key = result.get("key", "") if isinstance(result, dict) else ""
+        if new_key:
+            self._status(f"✓ Duplicated {source_key} → {new_key}.")
+            self._load_sprint_issues(reselect_key=new_key)
+        else:
+            errors = result.get("errorMessages", []) if isinstance(result, dict) else []
+            QMessageBox.critical(self, "Duplicate Failed", "\n".join(errors) or "Unknown error.")
+
+    def _quick_add_story(self):
+        summary = self.quick_add_edit.text().strip()
+        if not summary or not self._client: return
+        types = [self.edit_panel.issuetype_combo.itemData(i)
+                 for i in range(self.edit_panel.issuetype_combo.count())
+                 if self.edit_panel.issuetype_combo.itemData(i)]
+        if not types:
+            QMessageBox.warning(self, "Quick Add", "No issue types loaded."); return
+        self.quick_add_edit.clear()
+        self.quick_add_edit.setEnabled(False)
+        self._busy(True); self._status("Creating story…")
+        self._spawn(self._client.create_issue,
+            self.project_combo.currentData(), summary, types[0], "", None, None, None,
+            self.sprint_combo.currentData(), None,
+            on_result=lambda r: self._on_quick_add_done(r),
+            on_error=lambda e: (self._busy(False), self.quick_add_edit.setEnabled(True),
+                self._status("✗ Quick add failed."),
+                QMessageBox.critical(self, "Quick Add Failed", str(e))))
+
+    def _on_quick_add_done(self, result):
+        self._busy(False)
+        self.quick_add_edit.setEnabled(True)
+        key = result.get("key", "") if isinstance(result, dict) else ""
+        if key:
+            self._status(f"✓ Created {key}.")
+            self._load_sprint_issues(reselect_key=key)
+        else:
+            errors = result.get("errorMessages", []) if isinstance(result, dict) else []
+            QMessageBox.critical(self, "Quick Add Failed", "\n".join(errors) or "Unknown error.")
 
     def closeEvent(self, event):
         in_flight = sum(1 for w in self._workers if w.isRunning())
