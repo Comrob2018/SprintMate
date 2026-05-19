@@ -1124,17 +1124,12 @@ class ImportCommentsDialog(QDialog):
         detail_layout.addWidget(self._detail_comment)
         layout.addWidget(self._detail_frame)
         
-        # This code goes **right before** the connection at line 1127
-        # (i.e. still inside `__init__` after the table has been created)
-
-        selection = self.table.selectionModel()          # the selection model
-        cur_index = selection.currentIndex()            # QModelIndex of the current cell
+        selection = self.table.selectionModel()         
+        cur_index = selection.currentIndex()            
         current_row = cur_index.row() if cur_index.isValid() else -1
 
-        # There is no built‑in “previous” index, so we start with a default value.
-        previous_row = -1                                # –1 means “no previous row yet”
+        previous_row = -1                                
 
-        # Keep them as instance attributes so the slot can read them later
         self._current_row  = current_row
         self._previous_row = previous_row
         self.table.selectionModel().currentRowChanged.connect(self._on_row_changed)
