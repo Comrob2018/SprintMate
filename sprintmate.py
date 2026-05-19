@@ -1595,7 +1595,12 @@ class StoryEditPanel(QFrame):
         layout.addWidget(grp_comment)
 
         layout.addStretch()
-
+        self.undo_btn = QPushButton("↩  Undo Save")
+        self.undo_btn.setMinimumHeight(40)
+        self.undo_btn.setToolTip("Restore the state from before the last save")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self._undo_save)
+        btn_row.addWidget(self.undo_btn)
         self.save_btn = QPushButton("▶  SAVE CHANGES")
         self.save_btn.setObjectName("save_btn")
         self.save_btn.setMinimumHeight(40)
