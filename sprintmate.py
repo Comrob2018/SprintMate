@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QDate, QTimer, QSettings
 )
+from PyQt6.QtGui import QAction
 from PyQt6.QtGui import (
     QColor, QPalette, QKeySequence, QShortcut
 )
@@ -94,7 +95,10 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.13.0"
+APP_VERSION  = "2.13.1"
+GITHUB_RAW_URL = (
+    "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/sprintmate.py"
+)
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -2119,6 +2123,16 @@ class MainWindow(QMainWindow):
 
         root.addWidget(topbar)
 
+        # ── Help menu ────────────────────────────────────────────────────
+        _help_menu = self.menuBar().addMenu("Help")
+        _upd_act = QAction("Check for Updates…", self)
+        _upd_act.triggered.connect(self._check_for_updates)
+        _help_menu.addAction(_upd_act)
+        _help_menu.addSeparator()
+        _about_act = QAction("About SprintMate", self)
+        _about_act.triggered.connect(self._show_about)
+        _help_menu.addAction(_about_act)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setFixedHeight(4)
@@ -2153,87 +2167,91 @@ class MainWindow(QMainWindow):
         stories_layout.setContentsMargins(0, 0, 0, 0)
         stories_layout.setSpacing(0)
 
+        # ── Filter bar: row 1 (selection) + row 2 (actions + filters) ──────
         filterbar = QFrame()
         filterbar.setStyleSheet(f"background-color: {PANEL_BG}; border-bottom: 1px solid {BORDER};")
-        fb_layout = QHBoxLayout(filterbar)
-        fb_layout.setContentsMargins(20, 8, 20, 8)
-        fb_layout.setSpacing(12)
+        fb_outer = QVBoxLayout(filterbar)
+        fb_outer.setContentsMargins(20, 6, 20, 6)
+        fb_outer.setSpacing(4)
 
-        fb_layout.addWidget(QLabel("PROJECT"))
+        # Row 1 — board/sprint selection
+        fb_row1 = QHBoxLayout()
+        fb_row1.setSpacing(10)
+        fb_row1.addWidget(QLabel("PROJECT"))
         self.project_combo = QComboBox()
-        self.project_combo.setMinimumWidth(180)
+        self.project_combo.setMinimumWidth(160)
         self.project_combo.setEnabled(False)
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
-        fb_layout.addWidget(self.project_combo)
-
-        fb_layout.addWidget(QLabel("BOARD"))
+        fb_row1.addWidget(self.project_combo)
+        fb_row1.addWidget(QLabel("BOARD"))
         self.board_combo = QComboBox()
-        self.board_combo.setMinimumWidth(160)
+        self.board_combo.setMinimumWidth(140)
         self.board_combo.setEnabled(False)
         self.board_combo.currentIndexChanged.connect(self._on_board_changed)
-        fb_layout.addWidget(self.board_combo)
-
-        fb_layout.addWidget(QLabel("SPRINT"))
+        fb_row1.addWidget(self.board_combo)
+        fb_row1.addWidget(QLabel("SPRINT"))
         self.sprint_combo = QComboBox()
         self.sprint_combo.setMinimumWidth(200)
         self.sprint_combo.setEnabled(False)
-        fb_layout.addWidget(self.sprint_combo)
-
+        fb_row1.addWidget(self.sprint_combo)
         self.load_btn = QPushButton("Load Stories")
         self.load_btn.setObjectName("toolbar_btn")
         self.load_btn.clicked.connect(self._load_sprint_issues)
         self.load_btn.setEnabled(False)
-        fb_layout.addWidget(self.load_btn)
-
-        fb_layout.addWidget(QLabel("COMPARE"))
+        fb_row1.addWidget(self.load_btn)
+        fb_row1.addSpacing(12)
+        fb_row1.addWidget(QLabel("COMPARE"))
         self.compare_combo = QComboBox()
-        self.compare_combo.setMinimumWidth(200)
+        self.compare_combo.setMinimumWidth(180)
         self.compare_combo.setEnabled(False)
-        self.compare_combo.setToolTip("Select a sprint to compare against")
-        fb_layout.addWidget(self.compare_combo)
+        self.compare_combo.setToolTip("Select a sprint to compare against the loaded sprint")
+        fb_row1.addWidget(self.compare_combo)
         self.compare_btn = QPushButton("⇆  Compare")
         self.compare_btn.setObjectName("toolbar_btn")
         self.compare_btn.setEnabled(False)
         self.compare_btn.clicked.connect(self._compare_sprints)
-        fb_layout.addWidget(self.compare_btn)
+        fb_row1.addWidget(self.compare_btn)
+        fb_row1.addStretch()
+        fb_outer.addLayout(fb_row1)
 
+        # Row 2 — action buttons + filters
+        fb_row2 = QHBoxLayout()
+        fb_row2.setSpacing(6)
         self.new_story_btn = QPushButton("＋  New Story")
         self.new_story_btn.setObjectName("toolbar_btn")
         self.new_story_btn.clicked.connect(self._open_new_story)
         self.new_story_btn.setEnabled(False)
-        fb_layout.addWidget(self.new_story_btn)
-
+        fb_row2.addWidget(self.new_story_btn)
         self.bulk_create_btn = QPushButton("＋＋  Bulk Create")
         self.bulk_create_btn.setObjectName("toolbar_btn")
         self.bulk_create_btn.setToolTip("Create multiple stories from a CSV file")
         self.bulk_create_btn.clicked.connect(self._open_bulk_create)
         self.bulk_create_btn.setEnabled(False)
-        fb_layout.addWidget(self.bulk_create_btn)
-
+        fb_row2.addWidget(self.bulk_create_btn)
         self.import_btn = QPushButton("📄  Import")
         self.import_btn.setObjectName("toolbar_btn")
         self.import_btn.clicked.connect(self._import_comments)
         self.import_btn.setEnabled(False)
-        fb_layout.addWidget(self.import_btn)
-
+        fb_row2.addWidget(self.import_btn)
         self.export_btn = QPushButton("⬇  Export")
         self.export_btn.setObjectName("toolbar_btn")
         self.export_btn.clicked.connect(self._export_stories)
         self.export_btn.setEnabled(False)
-        fb_layout.addWidget(self.export_btn)
-        fb_layout.addStretch()
-
-        fb_layout.addWidget(QLabel("ASSIGNEE"))
+        fb_row2.addWidget(self.export_btn)
+        fb_row2.addStretch()
+        fb_row2.addWidget(QLabel("ASSIGNEE"))
         self.assignee_filter_combo = QComboBox()
-        self.assignee_filter_combo.setMinimumWidth(140)
+        self.assignee_filter_combo.setMinimumWidth(130)
         self.assignee_filter_combo.setEnabled(False)
-        self.assignee_filter_combo.setToolTip("Filter by assignee")
+        self.assignee_filter_combo.setToolTip("Filter stories by assignee")
         self.assignee_filter_combo.currentIndexChanged.connect(self._apply_assignee_filter)
-        fb_layout.addWidget(self.assignee_filter_combo)
+        fb_row2.addWidget(self.assignee_filter_combo)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Filter stories…")
+        self.search_edit.setMinimumWidth(180)
         self.search_edit.textChanged.connect(self._filter_table)
-        fb_layout.addWidget(self.search_edit)
+        fb_row2.addWidget(self.search_edit)
+        fb_outer.addLayout(fb_row2)
 
         stories_layout.addWidget(filterbar)
 
@@ -3967,6 +3985,63 @@ class MainWindow(QMainWindow):
         else:
             errors = result.get("errorMessages", []) if isinstance(result, dict) else []
             QMessageBox.critical(self, "Quick Add Failed", "\n".join(errors) or "Unknown error.")
+
+    def _check_for_updates(self):
+        self._status("Checking for updates…")
+        self._spawn(
+            self._fetch_remote_version,
+            on_result=self._on_update_result,
+            on_error=lambda e: QMessageBox.warning(
+                self, "Update Check Failed",
+                f"Could not reach GitHub:\n{e}"),
+        )
+
+    @staticmethod
+    def _fetch_remote_version() -> str:
+        ctx = ssl.create_default_context()
+        req = urllib.request.Request(
+            GITHUB_RAW_URL,
+            headers={"User-Agent": f"SprintMate/{APP_VERSION}"},
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace")
+                m = re.match(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', line)
+                if m:
+                    return m.group(1)
+        raise RuntimeError("APP_VERSION not found in remote file.")
+
+    def _on_update_result(self, remote_version: str):
+        local = APP_VERSION
+        self._status(f"Update check complete — remote: {remote_version}  local: {local}")
+        if remote_version == local:
+            QMessageBox.information(
+                self, "Up to Date",
+                f"You are running the latest version ({local})."
+            )
+        else:
+            reply = QMessageBox.question(
+                self, "Update Available",
+                f"A new version is available.\n\n"
+                f"  Installed:  {local}\n"
+                f"  Available:  {remote_version}\n\n"
+                "Open the repository page to download?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                repo_url = "/".join(GITHUB_RAW_URL.split("/")[:5]).replace(
+                    "raw.githubusercontent.com", "github.com"
+                )
+                webbrowser.open(repo_url)
+
+    def _show_about(self):
+        QMessageBox.about(
+            self, "About SprintMate",
+            f"<b>SprintMate</b> v{APP_VERSION}<br><br>"
+            "Jira sprint management desktop client.<br><br>"
+            "<a href='https://github.com/YOUR_USERNAME/YOUR_REPO'>"
+            "View on GitHub</a>",
+        )
 
     def closeEvent(self, event):
         in_flight = sum(1 for w in self._workers if w.isRunning())
