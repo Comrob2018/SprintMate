@@ -1,4 +1,20 @@
 # SprintMate Changelog
+## [2.13.0] — 2026-05-18
+### Features
+
+* **Undo last save.** A "↩ Undo Save" button added alongside the Save button restores all edit-panel fields (assignee, feature link, issue type, priority, story points, sprint, due date, description) to their exact pre-save state. The button is enabled only after a successful save and cleared automatically when a different story is loaded.
+* **Sprint velocity summary bar.** A centred label in the count row shows X pts total · Y in progress · Z done (N pts), computed from the loaded issues on every sprint load. Points are read from the configured story-point field with the standard customfield_10016 fallback.
+* **Keyboard story navigation.** Ctrl+↑ and Ctrl+↓ step through visible table rows from anywhere in the main window. Rows hidden by the text search or assignee filter are skipped.
+* **Token expiry banner.** An amber banner (#5A3E00 background, ACCENT_ORANGE border) now appears below the progress bar when a token is expired or within 14 days of expiry, replacing the status-bar-only warning that was easy to miss. The banner is dismissable with a ✕ button and hides automatically when no warnings are active.
+* **Inline quick-add story bar.** A text field at the bottom of the story table creates a story in the current sprint on Enter, using the first available issue type. The table reloads and auto-selects the new issue on success; the bar is disabled while no sprint is loaded.
+* **Comment templates.** A "Template:" dropdown above the comment text box populates the field from five built-in templates (Blocked by:, Ready for review., Carried to next sprint., In progress — ETA:, Merged to main.). The combo resets to "— select —" after selection so the same template can be reapplied. Templates are defined in the new COMMENT_TEMPLATES module-level constant.
+* **Duplicate story.** A "⧉ Duplicate Story" item in the row context menu creates a copy of the selected story in the current sprint, inheriting summary (suffixed " (copy)"), issue type, priority, story points, assignee, due date, and description. ADF descriptions are converted to plain text before submission. The table reloads and auto-selects the new issue on success.
+* **Sprint comparison view.** A COMPARE dropdown and "⇆ Compare" button in the filter bar highlight differences between the loaded sprint and a selected comparison sprint. Stories new to the current sprint are tinted green (#1A3A1A); stories with changed status, assignee, or story points are tinted blue (#1A2A3A). Hovering the KEY cell of a changed row shows a tooltip listing each diff. The status bar reports counts of added, removed, and changed stories. Highlights persist until the sprint is reloaded.
+* **Copy row as Markdown.** Ctrl+Shift+M and a new "⎘ Copy as Markdown" context menu item copy the selected row as | [KEY](url) | summary | assignee | status | pts |. The KEY is hyperlinked to Jira when a base URL is configured.
+* **Due date warning highlights.** Overdue due dates are shown in ACCENT_ORANGE with an "Overdue by X day(s)" tooltip; dates within three days are shown in amber (#E3B341) with a "Due in X day(s)" tooltip. Applied at populate time using the existing date import.
+* **Assignee filter dropdown.** An ASSIGNEE combo in the filter bar restricts the table to a single assignee's stories. The list is built from the loaded sprint on every load, resets when the sprint view is cleared, and is ANDed with the existing text search so both filters can be active simultaneously. _filter_table updated to respect the assignee selection.
+Remember last sprint per board. The selected sprint ID is written to QSettings as last_sprint_{board_id} when stories are loaded and restored automatically the next time sprints are loaded for the same board.
+
 ## [2.12.1] - 2026-05-18
 
 ### Bug Fixes
