@@ -97,7 +97,7 @@ STATUS_COLORS = {
 
 APP_VERSION  = "2.13.1"
 GITHUB_RAW_URL = (
-    "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/sprintmate.py"
+    "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
 )
 
 STYLESHEET = f"""
