@@ -1,8 +1,28 @@
-Traceback (most recent call last):
-  File "c:\Users\P09816\OneDrive - NGC\Desktop\Coding\JIRA_manager\sprintmate.py", line 3186, in _on_story_selected
-    self.edit_panel.load_issue(issue)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
-  File "c:\Users\P09816\OneDrive - NGC\Desktop\Coding\JIRA_manager\sprintmate.py", line 1726, in load_issue
-    self.undo_btn.setEnabled(False)
-    ^^^^^^^^^^^^^
-AttributeError: 'StoryEditPanel' object has no attribute 'undo_btn'
+The only change is in _build_ui — replace the standalone save_btn block with the btn_row version:
+
+Before:
+
+        self.save_btn = QPushButton("▶  SAVE CHANGES")
+        self.save_btn.setObjectName("save_btn")
+        self.save_btn.setMinimumHeight(40)
+        self.save_btn.clicked.connect(self._on_save)
+        self.save_btn.setEnabled(False)
+        layout.addWidget(self.save_btn)
+
+
+After:
+
+        btn_row = QHBoxLayout()
+        self.undo_btn = QPushButton("↩  Undo Save")
+        self.undo_btn.setMinimumHeight(40)
+        self.undo_btn.setToolTip("Restore the state from before the last save")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self._undo_save)
+        btn_row.addWidget(self.undo_btn)
+        self.save_btn = QPushButton("▶  SAVE CHANGES")
+        self.save_btn.setObjectName("save_btn")
+        self.save_btn.setMinimumHeight(40)
+        self.save_btn.clicked.connect(self._on_save)
+        self.save_btn.setEnabled(False)
+        btn_row.addWidget(self.save_btn)
+        layout.addLayout(btn_row)
