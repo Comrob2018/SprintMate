@@ -1442,6 +1442,7 @@ class StoryEditPanel(QFrame):
         self._snapshot = {}
         self._pending_assignee = None
         self._full_comment_text = ""
+        self._pre_save_snapshot = None
         self._sp_field = "customfield_10016"
         self._fl_field = "customfield_10100"
         self._base_url = ""
@@ -1600,7 +1601,7 @@ class StoryEditPanel(QFrame):
         self.undo_btn.setToolTip("Restore the state from before the last save")
         self.undo_btn.setEnabled(False)
         self.undo_btn.clicked.connect(self._undo_save)
-        btn_row.addWidget(self.undo_btn)
+        layout.addWidget(self.undo_btn)
         self.save_btn = QPushButton("▶  SAVE CHANGES")
         self.save_btn.setObjectName("save_btn")
         self.save_btn.setMinimumHeight(40)
@@ -1631,6 +1632,45 @@ class StoryEditPanel(QFrame):
         self.comment_template_combo.blockSignals(True)
         self.comment_template_combo.setCurrentIndex(0)
         self.comment_template_combo.blockSignals(False)
+    
+    def _undo_save(self):
+        if not self._pre_save_snapshot:
+            return
+        snap = self._pre_save_snapshot
+        self.blockSignals(True)
+        for i in range(self.assignee_combo.count()):
+            if self.assignee_combo.itemData(i) == snap.get("assignee"):
+                self.assignee_combo.setCurrentIndex(i)
+                break
+        self.feature_link_edit.setText(snap.get("feature_link", ""))
+        for i in range(self.issuetype_combo.count()):
+            if self.issuetype_combo.itemData(i) == snap.get("issuetype"):
+                self.issuetype_combo.setCurrentIndex(i)
+                break
+        for i in range(self.priority_combo.count()):
+            if self.priority_combo.itemData(i) == snap.get("priority"):
+                self.priority_combo.setCurrentIndex(i)
+                break
+        for i in range(self.points_combo.count()):
+            if self.points_combo.itemData(i) == snap.get("points"):
+                self.points_combo.setCurrentIndex(i)
+                break
+        for i in range(self.sprint_combo.count()):
+            if self.sprint_combo.itemData(i) == snap.get("sprint"):
+                self.sprint_combo.setCurrentIndex(i)
+                break
+        if snap.get("due_set") and snap.get("due_date"):
+            self._due_set = True
+            self.due_date.setDate(QDate.fromString(snap["due_date"], "yyyy-MM-dd"))
+        else:
+            self._due_set = False
+            self.due_date.setDate(QDate.currentDate())
+        self.desc_edit.setPlainText(snap.get("desc", ""))
+        self.blockSignals(False)
+        self._snapshot = self._snapshot_state()
+        self._pre_save_snapshot = None
+        self.undo_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
 
     def _open_in_jira(self):
         if self.current_key and self._base_url:
@@ -1930,6 +1970,7 @@ class StoryEditPanel(QFrame):
         target_sprint = self.sprint_combo.currentData()
         transition_id = self.transition_combo.currentData()
         comment = self.comment_edit.toPlainText().strip()
+        self._pre_save_snapshot = self._snapshot_state()
         self.saved.emit(self.current_key, fields, comment, transition_id, target_sprint)
 
 
@@ -3870,6 +3911,7 @@ class MainWindow(QMainWindow):
             self._status(f"✓ {key} updated successfully.")
         self.edit_panel._snapshot = self.edit_panel._snapshot_state()
         self.edit_panel.save_btn.setEnabled(False)
+        self.edit_panel.undo_btn.setEnabled(True)
         self.edit_panel.save_btn.setToolTip("No changes to save")
         self._load_sprint_issues(reselect_key=key)
 
