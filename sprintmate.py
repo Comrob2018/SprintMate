@@ -31,11 +31,11 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
     QFrame, QScrollArea, QDialog, QDialogButtonBox, QMessageBox,
     QGroupBox, QFormLayout, QListWidget, QListWidgetItem, QMenu,
-    QAbstractItemView, QProgressBar, QStatusBar,
+    QAbstractItemView, QProgressBar, QStatusBar, 
     QTabWidget, QDateEdit, QFileDialog
 )
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QDate, QTimer, QSettings
+    Qt, QThread, pyqtSignal, QDate, QTimer, QSettings, QModelIndex,
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtGui import (
@@ -1123,8 +1123,21 @@ class ImportCommentsDialog(QDialog):
             detail_layout.addWidget(lbl)
         detail_layout.addWidget(self._detail_comment)
         layout.addWidget(self._detail_frame)
+        
+        # This code goes **right before** the connection at line 1127
+        # (i.e. still inside `__init__` after the table has been created)
 
-        self.table.currentRowChanged.connect(self._on_row_changed)
+        selection = self.table.selectionModel()          # the selection model
+        cur_index = selection.currentIndex()            # QModelIndex of the current cell
+        current_row = cur_index.row() if cur_index.isValid() else -1
+
+        # There is no built‑in “previous” index, so we start with a default value.
+        previous_row = -1                                # –1 means “no previous row yet”
+
+        # Keep them as instance attributes so the slot can read them later
+        self._current_row  = current_row
+        self._previous_row = previous_row
+        self.table.selectionModel().currentRowChanged.connect(self._on_row_changed)
 
         if unmatched:
             warn = QLabel(f"⚠  {len(unmatched)} keys not found in current sprint will be skipped.")
@@ -1145,10 +1158,18 @@ class ImportCommentsDialog(QDialog):
 
         self._to_post = {k: entry["comment"] for k, entry in parsed.items() if k in loaded_keys}
 
-    def _on_row_changed(self, row: int):
+    def _on_row_changed(self, current: QModelIndex, previous: QModelIndex):
+        self._previous_row = self._current_row
+        
+        self._current_row = current.row() if current.isValid() else -1
+        if not current.isValid():
+            return
+        
+        row = self._current_row
         if row < 0:
             self._detail_frame.setVisible(False)
             return
+        
         key_item = self.table.item(row, 0)
         if not key_item:
             self._detail_frame.setVisible(False)
