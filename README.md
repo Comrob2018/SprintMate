@@ -14,8 +14,8 @@ A Python desktop app for managing your team's Jira Data Center sprint stories â€
   
 ### 2. Install python
 
-* Go to the appropriate place to get the latest version of python. **This might be an approved software listing**
-* **If using this on a company PC, you may need to get permission** 
+* Go to the appropriate place to get the latest version of python. 
+* **If using this on a company PC, you may need to get permission, typically there will be an approved software listing or process.** 
 
 ### 3. Install dependencies
 
