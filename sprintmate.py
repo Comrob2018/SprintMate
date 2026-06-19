@@ -95,7 +95,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.14.0"
+APP_VERSION  = "2.14.1"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
 )
@@ -626,6 +626,27 @@ class JiraClient:
             except Exception:
                 break
         return all_users
+
+    def archive_issues(self, issue_keys: list[str]) -> dict:
+        """Archive one or more issues. Requires Jira Data Center 8.1+."""
+        return self._request("POST", "issue/archive", {"issueIdsOrKeys": issue_keys})
+
+    def unarchive_issues(self, issue_keys: list[str]) -> dict:
+        """Unarchive one or more previously archived issues."""
+        return self._request("PUT", "issue/unarchive", {"issueIdsOrKeys": issue_keys})
+
+    def edit_comment(self, issue_key: str, comment_id: str, new_text: str) -> dict:
+        return self._request(
+            "PUT", f"issue/{issue_key}/comment/{comment_id}", {"body": new_text}
+        )
+
+    def delete_comment(self, issue_key: str, comment_id: str) -> None:
+        url = f"{self.base_url}/rest/api/{self.api_version}/issue/{issue_key}/comment/{comment_id}"
+        req = urllib.request.Request(url, headers=self.headers, method="DELETE")
+        try:
+            urllib.request.urlopen(req, timeout=15)
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} deleting comment {comment_id}: {e.read().decode(errors='replace')}")
 
     def attach_file(self, issue_key: str, file_path: str) -> dict:
         """Upload a file as an attachment to a Jira issue using multipart/form-data."""
@@ -1487,6 +1508,7 @@ class StoryEditPanel(QFrame):
         self._snapshot = {}
         self._pending_assignee = None
         self._full_comment_text = ""
+        self._comments_data = []  # full comment dicts including IDs
         self._pre_save_snapshot = None
         self._sp_field = "customfield_10016"
         self._fl_field = "customfield_10100"
@@ -1620,12 +1642,27 @@ class StoryEditPanel(QFrame):
             f"background: {DARK_BG}; border: none; color: {TEXT_SEC}; font-size: 12px;"
         )
         history_layout.addWidget(self.comment_history)
+        _comment_btn_row = QHBoxLayout()
+        _comment_btn_row.setSpacing(6)
         self._expand_comment_btn = QPushButton("⤢  Expand")
         self._expand_comment_btn.setFixedHeight(24)
         self._expand_comment_btn.setEnabled(False)
         self._expand_comment_btn.setToolTip("View the selected comment in full")
         self._expand_comment_btn.clicked.connect(self._expand_comment)
-        history_layout.addWidget(self._expand_comment_btn)
+        _comment_btn_row.addWidget(self._expand_comment_btn)
+        self._edit_comment_btn = QPushButton("✎  Edit")
+        self._edit_comment_btn.setFixedHeight(24)
+        self._edit_comment_btn.setEnabled(False)
+        self._edit_comment_btn.setToolTip("Edit the most recent comment")
+        _comment_btn_row.addWidget(self._edit_comment_btn)
+        self._delete_comment_btn = QPushButton("✕  Delete")
+        self._delete_comment_btn.setFixedHeight(24)
+        self._delete_comment_btn.setEnabled(False)
+        self._delete_comment_btn.setObjectName("danger")
+        self._delete_comment_btn.setToolTip("Delete the most recent comment")
+        _comment_btn_row.addWidget(self._delete_comment_btn)
+        _comment_btn_row.addStretch()
+        history_layout.addLayout(_comment_btn_row)
         layout.addWidget(grp_history)
 
         # ── Comment ───────────────────────────────────────────────────────────
@@ -1919,6 +1956,7 @@ class StoryEditPanel(QFrame):
             all_comments = comments_data.get("comments", [])
         else:
             all_comments = []
+        self._comments_data = all_comments  # store with IDs for edit/delete
         recent = all_comments[-5:]
         if recent:
             lines = []
@@ -1938,10 +1976,15 @@ class StoryEditPanel(QFrame):
             self.comment_history.setPlainText("\n\n".join(lines))
             self._full_comment_text = "\n\n".join(full_lines)
             self._expand_comment_btn.setEnabled(True)
+            self._edit_comment_btn.setEnabled(True)
+            self._delete_comment_btn.setEnabled(True)
         else:
             self.comment_history.setPlainText("")
             self._full_comment_text = ""
+            self._comments_data = []
             self._expand_comment_btn.setEnabled(False)
+            self._edit_comment_btn.setEnabled(False)
+            self._delete_comment_btn.setEnabled(False)
 
     def _copy_key(self):
         if self.current_key:
@@ -2621,6 +2664,12 @@ class MainWindow(QMainWindow):
         self.report_btn.clicked.connect(self._open_sprint_report)
         self.report_btn.setEnabled(False)
         fb_row2.addWidget(self.report_btn)
+        self.archive_btn = QPushButton("🗄  Archive")
+        self.archive_btn.setObjectName("toolbar_btn")
+        self.archive_btn.setToolTip("Archive selected story or choose stories to archive")
+        self.archive_btn.clicked.connect(self._open_archive)
+        self.archive_btn.setEnabled(False)
+        fb_row2.addWidget(self.archive_btn)
         fb_row2.addStretch()
         fb_row2.addWidget(QLabel("ASSIGNEE"))
         self.assignee_filter_combo = QComboBox()
@@ -2970,6 +3019,7 @@ class MainWindow(QMainWindow):
         self.export_btn.setEnabled(False)
         self.bulk_create_btn.setEnabled(False)
         self.report_btn.setEnabled(False)
+        self.archive_btn.setEnabled(False)
         self.quick_add_edit.setEnabled(False)
         self.quick_add_edit.clear()
         self.compare_combo.setEnabled(False)
@@ -3381,6 +3431,7 @@ class MainWindow(QMainWindow):
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
         self.report_btn.setEnabled(True)
+        self.archive_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
         reselect = self._reselect_key
         if reselect:
@@ -3576,6 +3627,21 @@ class MainWindow(QMainWindow):
             pass
         self.edit_panel.attach_btn.clicked.connect(
             lambda: self._attach_file_to_issue(key)
+        )
+        # Re-wire edit/delete comment buttons to current issue
+        try:
+            self.edit_panel._edit_comment_btn.clicked.disconnect()
+        except Exception:
+            pass
+        try:
+            self.edit_panel._delete_comment_btn.clicked.disconnect()
+        except Exception:
+            pass
+        self.edit_panel._edit_comment_btn.clicked.connect(
+            lambda: self._edit_comment(key)
+        )
+        self.edit_panel._delete_comment_btn.clicked.connect(
+            lambda: self._delete_comment(key)
         )
         self._spawn(
             self._client.get_issue_transitions, key,
@@ -4437,6 +4503,330 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec()
+
+    # ── Archive ───────────────────────────────────────────────────────────────
+    def _open_archive(self):
+        if not self._issues:
+            return
+
+        # Build a picker dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Archive Stories")
+        dlg.setMinimumSize(640, 480)
+        dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("🗄  ARCHIVE STORIES")
+        title.setObjectName("heading")
+        layout.addWidget(title)
+
+        hint = QLabel(
+            "Select stories to archive. Archived issues become read-only and are "
+            "removed from boards and search results. They can be restored from Jira admin."
+        )
+        hint.setObjectName("dim")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        search = QLineEdit()
+        search.setPlaceholderText("Search by key or summary…")
+        layout.addWidget(search)
+
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["", "KEY", "SUMMARY", "STATUS"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+        from PyQt6.QtWidgets import QCheckBox
+        checkboxes = []
+        for iss in sorted(self._issues, key=lambda i: i.get("key", "")):
+            f = iss.get("fields", {})
+            key = iss.get("key", "")
+            summary = f.get("summary", "")
+            status = (f.get("status") or {}).get("name", "—")
+            r = table.rowCount()
+            table.insertRow(r)
+            cb = QCheckBox()
+            cb_widget = QWidget()
+            cb_layout = QHBoxLayout(cb_widget)
+            cb_layout.addWidget(cb)
+            cb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cb_layout.setContentsMargins(0, 0, 0, 0)
+            table.setCellWidget(r, 0, cb_widget)
+            key_item = QTableWidgetItem(key)
+            key_item.setForeground(QColor(ACCENT_CYAN))
+            table.setItem(r, 1, key_item)
+            table.setItem(r, 2, QTableWidgetItem(summary))
+            s_item = QTableWidgetItem(status)
+            s_item.setForeground(QColor(STATUS_COLORS.get(status, TEXT_SEC)))
+            table.setItem(r, 3, s_item)
+            table.setRowHeight(r, 36)
+            checkboxes.append((cb, key))
+
+        layout.addWidget(table, 1)
+
+        def _filter(text):
+            term = text.lower()
+            for row in range(table.rowCount()):
+                k = (table.item(row, 1).text() if table.item(row, 1) else "").lower()
+                s = (table.item(row, 2).text() if table.item(row, 2) else "").lower()
+                table.setRowHidden(row, bool(term) and term not in k and term not in s)
+
+        search.textChanged.connect(_filter)
+
+        sel_lbl = QLabel("0 stories selected")
+        sel_lbl.setObjectName("dim")
+        layout.addWidget(sel_lbl)
+
+        def _update_count():
+            n = sum(1 for cb, _ in checkboxes if cb.isChecked())
+            sel_lbl.setText(f"{n} stor{'ies' if n != 1 else 'y'} selected")
+            archive_btn_dlg.setEnabled(n > 0)
+
+        for cb, _ in checkboxes:
+            cb.stateChanged.connect(lambda _: _update_count())
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        archive_btn_dlg = btns.button(QDialogButtonBox.StandardButton.Ok)
+        archive_btn_dlg.setText("🗄  Archive Selected")
+        archive_btn_dlg.setObjectName("save_btn")
+        archive_btn_dlg.setEnabled(False)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        keys_to_archive = [key for cb, key in checkboxes if cb.isChecked()]
+        if not keys_to_archive:
+            return
+
+        confirm = QMessageBox.question(
+            self, "Confirm Archive",
+            f"Archive {len(keys_to_archive)} stor{'ies' if len(keys_to_archive) != 1 else 'y'}?\n\n"
+            "Archived issues become read-only and are removed from boards and search results.\n"
+            "They can be restored later from Jira administration.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self._busy(True)
+        self._status(f"Archiving {len(keys_to_archive)} issue(s)…")
+
+        def _do_archive():
+            return self._client.archive_issues(keys_to_archive)
+
+        def _on_done(result):
+            self._busy(False)
+            errors = []
+            if isinstance(result, dict):
+                errors = result.get("errors", []) or result.get("errorMessages", [])
+            n_ok = len(keys_to_archive) - len(errors)
+            if not errors:
+                QMessageBox.information(
+                    self, "Archived",
+                    f"✓ Successfully archived {n_ok} issue(s)."
+                )
+                self._status(f"✓ Archived {n_ok} issue(s).")
+            else:
+                detail = "\n".join(str(e) for e in errors[:10])
+                QMessageBox.warning(
+                    self, "Archive — Partial Result",
+                    f"✓ {n_ok} archived.\n✗ {len(errors)} error(s):\n{detail}"
+                )
+                self._status(f"⚠ Archived {n_ok}, {len(errors)} error(s).")
+            self._load_sprint_issues()
+
+        self._spawn(_do_archive, on_result=_on_done,
+                    on_error=lambda e: (
+                        self._busy(False),
+                        self._status("✗ Archive failed."),
+                        QMessageBox.critical(self, "Archive Failed", str(e)),
+                    ))
+
+    # ── Edit / Delete Comment ─────────────────────────────────────────────────
+    def _edit_comment(self, key: str):
+        comments = self.edit_panel._comments_data
+        if not comments:
+            return
+
+        # Show a picker if there are multiple comments
+        if len(comments) == 1:
+            chosen = comments[0]
+        else:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Edit Comment — {key}")
+            dlg.setMinimumSize(560, 360)
+            dlg.setStyleSheet(self.styleSheet())
+            layout = QVBoxLayout(dlg)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(10)
+            lbl = QLabel("Select the comment to edit:")
+            lbl.setObjectName("subheading")
+            layout.addWidget(lbl)
+            lst = QListWidget()
+            for c in reversed(comments):
+                author = (c.get("author") or {}).get("displayName") or "Unknown"
+                created = (c.get("created") or "")[:10]
+                body = c.get("body", "")
+                if isinstance(body, dict):
+                    body = self.edit_panel._adf_to_text(body)
+                preview = body.strip().replace("\n", " ")[:80] + ("…" if len(body) > 80 else "")
+                item = QListWidgetItem(f"[{created}] {author}: {preview}")
+                item.setData(Qt.ItemDataRole.UserRole, c)
+                lst.addItem(item)
+            lst.setCurrentRow(0)
+            layout.addWidget(lst, 1)
+            btns = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            btns.accepted.connect(dlg.accept)
+            btns.rejected.connect(dlg.reject)
+            layout.addWidget(btns)
+            if dlg.exec() != QDialog.DialogCode.Accepted or not lst.currentItem():
+                return
+            chosen = lst.currentItem().data(Qt.ItemDataRole.UserRole)
+
+        comment_id = chosen.get("id", "")
+        body = chosen.get("body", "")
+        if isinstance(body, dict):
+            body = self.edit_panel._adf_to_text(body)
+
+        # Edit dialog
+        edit_dlg = QDialog(self)
+        edit_dlg.setWindowTitle(f"Edit Comment — {key}")
+        edit_dlg.setMinimumSize(520, 280)
+        edit_dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(edit_dlg)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        lbl = QLabel("Edit comment:")
+        lbl.setObjectName("subheading")
+        layout.addWidget(lbl)
+        editor = QTextEdit()
+        editor.setPlainText(body.strip())
+        layout.addWidget(editor, 1)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Save Comment")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.accepted.connect(edit_dlg.accept)
+        btns.rejected.connect(edit_dlg.reject)
+        layout.addWidget(btns)
+
+        if edit_dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_text = editor.toPlainText().strip()
+        if not new_text:
+            QMessageBox.warning(self, "Empty Comment", "Comment text cannot be empty.")
+            return
+
+        self._busy(True)
+        self._status(f"Updating comment on {key}…")
+        self._spawn(
+            self._client.edit_comment, key, comment_id, new_text,
+            on_result=lambda _: (
+                self._busy(False),
+                self._status(f"✓ Comment on {key} updated."),
+                self._load_sprint_issues(reselect_key=key),
+            ),
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Failed to update comment."),
+                QMessageBox.critical(self, "Edit Failed", str(e)),
+            ),
+        )
+
+    def _delete_comment(self, key: str):
+        comments = self.edit_panel._comments_data
+        if not comments:
+            return
+
+        if len(comments) == 1:
+            chosen = comments[0]
+        else:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Delete Comment — {key}")
+            dlg.setMinimumSize(560, 360)
+            dlg.setStyleSheet(self.styleSheet())
+            layout = QVBoxLayout(dlg)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(10)
+            lbl = QLabel("Select the comment to delete:")
+            lbl.setObjectName("subheading")
+            layout.addWidget(lbl)
+            lst = QListWidget()
+            for c in reversed(comments):
+                author = (c.get("author") or {}).get("displayName") or "Unknown"
+                created = (c.get("created") or "")[:10]
+                body = c.get("body", "")
+                if isinstance(body, dict):
+                    body = self.edit_panel._adf_to_text(body)
+                preview = body.strip().replace("\n", " ")[:80] + ("…" if len(body) > 80 else "")
+                item = QListWidgetItem(f"[{created}] {author}: {preview}")
+                item.setData(Qt.ItemDataRole.UserRole, c)
+                lst.addItem(item)
+            lst.setCurrentRow(0)
+            layout.addWidget(lst, 1)
+            btns = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            btns.button(QDialogButtonBox.StandardButton.Ok).setText("Select")
+            btns.accepted.connect(dlg.accept)
+            btns.rejected.connect(dlg.reject)
+            layout.addWidget(btns)
+            if dlg.exec() != QDialog.DialogCode.Accepted or not lst.currentItem():
+                return
+            chosen = lst.currentItem().data(Qt.ItemDataRole.UserRole)
+
+        comment_id = chosen.get("id", "")
+        body = chosen.get("body", "")
+        if isinstance(body, dict):
+            body = self.edit_panel._adf_to_text(body)
+        author = (chosen.get("author") or {}).get("displayName") or "Unknown"
+        preview = body.strip().replace("\n", " ")[:120]
+
+        confirm = QMessageBox.question(
+            self, "Delete Comment",
+            f"Permanently delete this comment by {author}?\n\n\"{preview}\"\n\n"
+            "This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self._busy(True)
+        self._status(f"Deleting comment on {key}…")
+        self._spawn(
+            self._client.delete_comment, key, comment_id,
+            on_result=lambda _: (
+                self._busy(False),
+                self._status(f"✓ Comment on {key} deleted."),
+                self._load_sprint_issues(reselect_key=key),
+            ),
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Failed to delete comment."),
+                QMessageBox.critical(self, "Delete Failed", str(e)),
+            ),
+        )
 
     def _check_for_updates(self):
         self._status("Checking for updates…")
