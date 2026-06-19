@@ -2,12 +2,12 @@
 ## [2.14.1] — 2026-06-19
 
 ### Features
-
 * **Archive stories from the sprint view.** Added a "🗄 Archive" button to the filter toolbar. Opens a searchable picker dialog with checkboxes to select which stories to archive, followed by a confirmation dialog. Calls `POST /rest/api/2/issue/archive` (Jira Data Center 8.1+). Archived issues become read-only and are removed from boards and search results but remain restorable from Jira administration. `unarchive_issues` (`PUT /rest/api/2/issue/unarchive`) is also implemented in `JiraClient` for future use.
-
 * **Edit posted comments.** Added a "✎ Edit" button to the RECENT COMMENTS panel in the story edit panel. If the story has more than one comment, a picker dialog lets the user select which to edit. Opens a pre-filled text editor and calls `PUT /rest/api/2/issue/{key}/comment/{id}` on save. Comment IDs are now stored when a story is loaded to support this.
-
 * **Delete posted comments.** Added a "✕ Delete" button to the RECENT COMMENTS panel. Shows a comment preview in a confirmation dialog before calling `DELETE /rest/api/2/issue/{key}/comment/{id}`. Jira's own permission rules apply — users can only delete comments they authored unless they have admin rights.
+
+### Bug Fixes
+* **Fixed HTTP 406 error on archive requests.** The `archive_issues` and `unarchive_issues` methods were routing through `_request()`, which sends `Accept: application/json` on every call. Jira's archive endpoint returns `text/plain`, causing the server to reject the request with 406 Not Acceptable before any archiving occurred. Both methods now bypass `_request()` and set `Accept: text/plain` directly, then parse the plain-text response for any error lines.
 
 ---
 
