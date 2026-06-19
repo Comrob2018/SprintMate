@@ -8,6 +8,7 @@
 
 ### Bug Fixes
 * **Fixed HTTP 406 error on archive requests.** The `archive_issues` and `unarchive_issues` methods were routing through `_request()`, which sends `Accept: application/json` on every call. Jira's archive endpoint returns `text/plain`, causing the server to reject the request with 406 Not Acceptable before any archiving occurred. Both methods now bypass `_request()` and set `Accept: text/plain` directly, then parse the plain-text response for any error lines.
+* **Fixed HTTP 400 error on archive requests.** The request body was being sent as `{"issueIdsOrKeys": [...]}` but the Jira Data Center archive endpoint expects a bare JSON array of strings. Jackson was rejecting the object wrapper with a `START_OBJECT` deserialization error. Both `archive_issues` and `unarchive_issues` now serialize the key list directly as `["KEY-1", "KEY-2"]`.
 
 ---
 
