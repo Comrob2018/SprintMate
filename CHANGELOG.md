@@ -9,6 +9,8 @@
 
 * **Delete posted comments.** Added a "✕ Delete" button to the RECENT COMMENTS panel. Shows a comment preview in a confirmation dialog before calling `DELETE /rest/api/2/issue/{key}/comment/{id}`. Jira's own permission rules apply — users can only delete comments they authored unless they have admin rights.
 
+---
+
 ## [2.14.0] — 2026-06-19
 ### Features
 * **File attachments for stories.** Added a "📎 Attach File" button to the story edit panel header. Clicking it opens a multi-file picker (any file type) and uploads each file to the selected Jira issue via the REST API (`POST /rest/api/2/issue/{key}/attachments`) using `multipart/form-data` with the required `X-Atlassian-Token: no-check` header. Per-file success and failure are reported individually.
