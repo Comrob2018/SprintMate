@@ -1,6 +1,15 @@
 # SprintMate Changelog
-## [2.14.1] — 2026-06-19
+## [2.14.2] — 2026-06-19
+### Bug Fixes
+* **Archive dialog checkboxes were rendering as slivers.** Replaced `QCheckBox` widgets wrapped in a centred `QHBoxLayout` cell widget with native `QTableWidgetItem` check states. The checkbox now fills the full row height and responds to a click anywhere in the first column. Count updates are now driven by `table.itemChanged` instead of per-widget `stateChanged` signals.
 
+### Improvements
+* **Added assignee column to the archive dialog.** The picker table now shows KEY, SUMMARY, ASSIGNEE, and STATUS, making it easier to identify stories by owner before archiving. The search box also matches against assignee name.
+* **Added sortable column headers to the archive dialog.** Clicking any column header sorts the table ascending or descending, consistent with the main sprint table.
+
+---
+
+## [2.14.1] — 2026-06-19
 ### Features
 * **Archive stories from the sprint view.** Added a "🗄 Archive" button to the filter toolbar. Opens a searchable picker dialog with checkboxes to select which stories to archive, followed by a confirmation dialog. Calls `POST /rest/api/2/issue/archive` (Jira Data Center 8.1+). Archived issues become read-only and are removed from boards and search results but remain restorable from Jira administration. `unarchive_issues` (`PUT /rest/api/2/issue/unarchive`) is also implemented in `JiraClient` for future use.
 * **Edit posted comments.** Added a "✎ Edit" button to the RECENT COMMENTS panel in the story edit panel. If the story has more than one comment, a picker dialog lets the user select which to edit. Opens a pre-filled text editor and calls `PUT /rest/api/2/issue/{key}/comment/{id}` on save. Comment IDs are now stored when a story is loaded to support this.
