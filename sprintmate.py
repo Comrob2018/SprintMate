@@ -632,12 +632,11 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/{self.api_version}/issue/archive"
         headers = dict(self.headers)
         headers["Accept"] = "text/plain"
-        body = json.dumps({"issueIdsOrKeys": issue_keys}).encode()
+        body = json.dumps(issue_keys).encode()
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 raw = resp.read().decode(errors="replace")
-                # Response is plain text lines; parse out any error lines
                 errors = [l for l in raw.splitlines() if l.strip() and "error" in l.lower()]
                 return {"errors": errors}
         except urllib.error.HTTPError as e:
@@ -648,7 +647,7 @@ class JiraClient:
         url = f"{self.base_url}/rest/api/{self.api_version}/issue/unarchive"
         headers = dict(self.headers)
         headers["Accept"] = "text/plain"
-        body = json.dumps({"issueIdsOrKeys": issue_keys}).encode()
+        body = json.dumps(issue_keys).encode()
         req = urllib.request.Request(url, data=body, headers=headers, method="PUT")
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
