@@ -1,4 +1,11 @@
 # SprintMate Changelog
+## [2.14.0] — 2026-06-19
+### Features
+* **File attachments for stories.** Added a "📎 Attach File" button to the story edit panel header. Clicking it opens a multi-file picker (any file type) and uploads each file to the selected Jira issue via the REST API (`POST /rest/api/2/issue/{key}/attachments`) using `multipart/form-data` with the required `X-Atlassian-Token: no-check` header. Per-file success and failure are reported individually.
+* **Sprint report generator.** Added a "📊 Sprint Report" button to the filter toolbar, enabled once stories are loaded. Generates an HTML report containing: a summary stat card row (total stories, done count, total/done points, velocity %), a status breakdown table with colour-coded badges, a per-assignee table with story counts, points, and a visual progress bar, and a full story table with keys hyperlinked to Jira. The report renders inline and can be saved as an HTML file via a save dialog.
+
+---
+
 ## [2.13.2] — 2026‑05‑19
 ### Bug Fixes
 * **Fixed row‑change handling errors.** The previous implementation connected to a non‑existent `currentRowChanged` signal and processed the wrong argument types, resulting in AttributeError and TypeError. The slot now receives the correct QModelIndex objects, extracts row numbers safely, and prevents invalid‑index crashes.
