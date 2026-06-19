@@ -95,7 +95,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.14.1"
+APP_VERSION  = "2.14.2"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
 )
@@ -4557,42 +4557,48 @@ class MainWindow(QMainWindow):
         layout.addWidget(search)
 
         table = QTableWidget()
-        table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["", "KEY", "SUMMARY", "STATUS"])
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["", "KEY", "SUMMARY", "ASSIGNEE", "STATUS"])
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         table.verticalHeader().setVisible(False)
         table.setShowGrid(False)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSortingEnabled(True)
+        table.horizontalHeader().setSortIndicatorShown(True)
 
-        from PyQt6.QtWidgets import QCheckBox
         checkboxes = []
         for iss in sorted(self._issues, key=lambda i: i.get("key", "")):
             f = iss.get("fields", {})
             key = iss.get("key", "")
             summary = f.get("summary", "")
             status = (f.get("status") or {}).get("name", "—")
+            aobj = f.get("assignee") or {}
+            assignee = aobj.get("displayName") or aobj.get("name") or "—"
             r = table.rowCount()
             table.insertRow(r)
-            cb = QCheckBox()
-            cb_widget = QWidget()
-            cb_layout = QHBoxLayout(cb_widget)
-            cb_layout.addWidget(cb)
-            cb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cb_layout.setContentsMargins(0, 0, 0, 0)
-            table.setCellWidget(r, 0, cb_widget)
+
+            cb_item = QTableWidgetItem()
+            cb_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            cb_item.setCheckState(Qt.CheckState.Unchecked)
+            table.setItem(r, 0, cb_item)
+
             key_item = QTableWidgetItem(key)
             key_item.setForeground(QColor(ACCENT_CYAN))
             table.setItem(r, 1, key_item)
             table.setItem(r, 2, QTableWidgetItem(summary))
+            a_item = QTableWidgetItem(assignee)
+            a_item.setForeground(QColor(TEXT_SEC))
+            table.setItem(r, 3, a_item)
             s_item = QTableWidgetItem(status)
             s_item.setForeground(QColor(STATUS_COLORS.get(status, TEXT_SEC)))
-            table.setItem(r, 3, s_item)
+            table.setItem(r, 4, s_item)
             table.setRowHeight(r, 36)
-            checkboxes.append((cb, key))
+            checkboxes.append((cb_item, key))
 
         layout.addWidget(table, 1)
 
@@ -4601,7 +4607,8 @@ class MainWindow(QMainWindow):
             for row in range(table.rowCount()):
                 k = (table.item(row, 1).text() if table.item(row, 1) else "").lower()
                 s = (table.item(row, 2).text() if table.item(row, 2) else "").lower()
-                table.setRowHidden(row, bool(term) and term not in k and term not in s)
+                a = (table.item(row, 3).text() if table.item(row, 3) else "").lower()
+                table.setRowHidden(row, bool(term) and term not in k and term not in s and term not in a)
 
         search.textChanged.connect(_filter)
 
@@ -4610,12 +4617,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(sel_lbl)
 
         def _update_count():
-            n = sum(1 for cb, _ in checkboxes if cb.isChecked())
+            n = sum(1 for cb, _ in checkboxes if cb.checkState() == Qt.CheckState.Checked)
             sel_lbl.setText(f"{n} stor{'ies' if n != 1 else 'y'} selected")
             archive_btn_dlg.setEnabled(n > 0)
 
-        for cb, _ in checkboxes:
-            cb.stateChanged.connect(lambda _: _update_count())
+        table.itemChanged.connect(lambda _: _update_count())
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -4631,7 +4637,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        keys_to_archive = [key for cb, key in checkboxes if cb.isChecked()]
+        keys_to_archive = [key for cb, key in checkboxes if cb.checkState() == Qt.CheckState.Checked]
         if not keys_to_archive:
             return
 
