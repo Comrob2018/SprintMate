@@ -629,11 +629,34 @@ class JiraClient:
 
     def archive_issues(self, issue_keys: list[str]) -> dict:
         """Archive one or more issues. Requires Jira Data Center 8.1+."""
-        return self._request("POST", "issue/archive", {"issueIdsOrKeys": issue_keys})
+        url = f"{self.base_url}/rest/api/{self.api_version}/issue/archive"
+        headers = dict(self.headers)
+        headers["Accept"] = "text/plain"
+        body = json.dumps({"issueIdsOrKeys": issue_keys}).encode()
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode(errors="replace")
+                # Response is plain text lines; parse out any error lines
+                errors = [l for l in raw.splitlines() if l.strip() and "error" in l.lower()]
+                return {"errors": errors}
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} archiving issues: {e.read().decode(errors='replace')}")
 
     def unarchive_issues(self, issue_keys: list[str]) -> dict:
         """Unarchive one or more previously archived issues."""
-        return self._request("PUT", "issue/unarchive", {"issueIdsOrKeys": issue_keys})
+        url = f"{self.base_url}/rest/api/{self.api_version}/issue/unarchive"
+        headers = dict(self.headers)
+        headers["Accept"] = "text/plain"
+        body = json.dumps({"issueIdsOrKeys": issue_keys}).encode()
+        req = urllib.request.Request(url, data=body, headers=headers, method="PUT")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode(errors="replace")
+                errors = [l for l in raw.splitlines() if l.strip() and "error" in l.lower()]
+                return {"errors": errors}
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} unarchiving issues: {e.read().decode(errors='replace')}")
 
     def edit_comment(self, issue_key: str, comment_id: str, new_text: str) -> dict:
         return self._request(
