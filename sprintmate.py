@@ -95,7 +95,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.13.2"
+APP_VERSION  = "2.14.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
 )
@@ -626,6 +626,35 @@ class JiraClient:
             except Exception:
                 break
         return all_users
+
+    def attach_file(self, issue_key: str, file_path: str) -> dict:
+        """Upload a file as an attachment to a Jira issue using multipart/form-data."""
+        import os
+        url = f"{self.base_url}/rest/api/{self.api_version}/issue/{issue_key}/attachments"
+        filename = os.path.basename(file_path)
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+
+        boundary = "----SprintMateUpload7f3a9b"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        headers = dict(self.headers)
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        headers["X-Atlassian-Token"] = "no-check"
+        headers.pop("Accept", None)
+
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode(errors="replace")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            raise RuntimeError(f"HTTP {e.code} attaching file: {detail}")
 
     def bulk_create_issues(self, project_key: str, rows: list[dict],
                            progress_cb=None) -> list[dict]:
@@ -1488,10 +1517,15 @@ class StoryEditPanel(QFrame):
         self.open_jira_btn.setFixedHeight(28)
         self.open_jira_btn.setEnabled(False)
         self.open_jira_btn.clicked.connect(self._open_in_jira)
+        self.attach_btn = QPushButton("📎  Attach File")
+        self.attach_btn.setToolTip("Attach a file to this Jira issue")
+        self.attach_btn.setFixedHeight(28)
+        self.attach_btn.setEnabled(False)
         hdr.addWidget(self.title_lbl, 1)
         hdr.addWidget(self.key_lbl)
         hdr.addWidget(self.copy_key_btn)
         hdr.addWidget(self.open_jira_btn)
+        hdr.addWidget(self.attach_btn)
         layout.addLayout(hdr)
 
         self.status_badge = QLabel("")
@@ -1790,6 +1824,7 @@ class StoryEditPanel(QFrame):
         self.save_btn.setToolTip("No changes to save")
         self.copy_key_btn.setEnabled(True)
         self.open_jira_btn.setEnabled(True)
+        self.attach_btn.setEnabled(True)
 
     def _load_issue_fields(self, issue: dict):
         self.current_key = issue["key"]
@@ -2092,6 +2127,286 @@ class ExportStoriesDialog(QDialog):
         return list(self._basket.values())
 
 
+# ── Sprint Report Dialog ──────────────────────────────────────────────────────
+class SprintReportDialog(QDialog):
+    """Generates and displays an HTML sprint report with stats and story table."""
+
+    def __init__(self, issues: list, sprint_label: str, sp_field: str,
+                 fl_field: str, base_url: str, adf_to_text_fn, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sprint Report")
+        self.setMinimumSize(900, 680)
+        self.setStyleSheet(parent.styleSheet() if parent else "")
+
+        self._issues       = issues
+        self._sprint_label = sprint_label
+        self._sp_field     = sp_field
+        self._fl_field     = fl_field
+        self._base_url     = base_url
+        self._adf_to_text  = adf_to_text_fn
+        self._html         = ""
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("◈  SPRINT REPORT")
+        title.setObjectName("heading")
+        layout.addWidget(title)
+
+        sub = QLabel(sprint_label)
+        sub.setObjectName("dim")
+        layout.addWidget(sub)
+
+        from PyQt6.QtWidgets import QTextBrowser
+        self._browser = QTextBrowser()
+        self._browser.setOpenExternalLinks(True)
+        self._browser.setStyleSheet(
+            f"background: #ffffff; color: #111111; border: 1px solid {BORDER}; border-radius: 6px;"
+        )
+        layout.addWidget(self._browser, 1)
+
+        btn_row = QHBoxLayout()
+        save_btn = QPushButton("⬇  Save as HTML")
+        save_btn.setObjectName("toolbar_btn")
+        save_btn.clicked.connect(self._save_html)
+        btn_row.addWidget(save_btn)
+        btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self._build_report()
+
+    # ── Build ─────────────────────────────────────────────────────────────────
+    def _build_report(self):
+        sp = self._sp_field
+        today = date.today().strftime("%Y-%m-%d")
+
+        # ── Aggregate stats ───────────────────────────────────────────────────
+        total_pts = done_pts = 0
+        status_counts: dict[str, int] = {}
+        assignee_stats: dict[str, dict] = {}
+
+        for iss in self._issues:
+            f = iss.get("fields", {})
+            status = (f.get("status") or {}).get("name", "—")
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            pts_raw = f.get(sp) or f.get("customfield_10016")
+            try:
+                pts = int(float(pts_raw)) if pts_raw is not None else 0
+            except (TypeError, ValueError):
+                pts = 0
+            total_pts += pts
+            if status == "Done":
+                done_pts += pts
+
+            aobj = f.get("assignee") or {}
+            aname = aobj.get("displayName") or aobj.get("name") or "Unassigned"
+            if aname not in assignee_stats:
+                assignee_stats[aname] = {"total": 0, "done": 0, "pts": 0, "done_pts": 0, "stories": []}
+            assignee_stats[aname]["total"] += 1
+            assignee_stats[aname]["pts"] += pts
+            if status == "Done":
+                assignee_stats[aname]["done"] += 1
+                assignee_stats[aname]["done_pts"] += pts
+            assignee_stats[aname]["stories"].append(iss)
+
+        pct_done = round(done_pts / total_pts * 100) if total_pts else 0
+        n_done   = status_counts.get("Done", 0)
+        n_total  = len(self._issues)
+
+        # ── Status colour map (inline CSS) ───────────────────────────────────
+        STATUS_CSS = {
+            "To Do":       "#6e7681",
+            "In Progress": "#388bfd",
+            "Done":        "#3fb950",
+            "In Review":   "#39d5f5",
+            "Blocked":     "#f78166",
+        }
+
+        def status_badge(name):
+            col = STATUS_CSS.get(name, "#8b949e")
+            return (f'<span style="display:inline-block;padding:2px 8px;border-radius:10px;'
+                    f'font-size:11px;font-weight:bold;background:{col}22;color:{col};'
+                    f'border:1px solid {col}55;">{name}</span>')
+
+        def priority_icon(name):
+            icons = {"Highest": "🔴", "High": "🟠", "Medium": "🟡",
+                     "Low": "🟢", "Lowest": "⚪"}
+            return icons.get(name, "•")
+
+        def bar(pct, colour="#388bfd", width=180):
+            filled = max(0, min(pct, 100))
+            return (f'<div style="display:inline-block;width:{width}px;height:8px;'
+                    f'background:#e0e0e0;border-radius:4px;vertical-align:middle;">'
+                    f'<div style="width:{filled}%;height:8px;background:{colour};'
+                    f'border-radius:4px;"></div></div>')
+
+        # ── Story rows ────────────────────────────────────────────────────────
+        story_rows = []
+        for iss in sorted(self._issues, key=lambda i: i.get("key", "")):
+            f      = iss.get("fields", {})
+            key    = iss.get("key", "")
+            summ   = f.get("summary", "")
+            status = (f.get("status") or {}).get("name", "—")
+            pri    = (f.get("priority") or {}).get("name", "—")
+            itype  = (f.get("issuetype") or {}).get("name", "—")
+            due    = (f.get("duedate") or "")[:10] or "—"
+            aobj   = f.get("assignee") or {}
+            aname  = aobj.get("displayName") or aobj.get("name") or "—"
+            pts_raw = f.get(sp) or f.get("customfield_10016")
+            try:
+                pts_str = str(int(float(pts_raw))) if pts_raw is not None else "—"
+            except (TypeError, ValueError):
+                pts_str = "—"
+
+            key_cell = (f'<a href="{self._base_url}/browse/{key}" style="color:#388bfd;">{key}</a>'
+                        if self._base_url else key)
+
+            due_style = ""
+            if due != "—":
+                try:
+                    days = (date.fromisoformat(due) - date.today()).days
+                    if days < 0:
+                        due_style = "color:#f78166;font-weight:bold;"
+                    elif days <= 3:
+                        due_style = "color:#e3b341;"
+                except ValueError:
+                    pass
+
+            story_rows.append(
+                f"<tr>"
+                f"<td>{key_cell}</td>"
+                f"<td>{summ}</td>"
+                f"<td>{aname}</td>"
+                f"<td>{status_badge(status)}</td>"
+                f"<td style='text-align:center;'>{priority_icon(pri)} {pri}</td>"
+                f"<td style='text-align:center;'>{pts_str}</td>"
+                f"<td style='text-align:center;{due_style}'>{due}</td>"
+                f"<td style='text-align:center;'>{itype}</td>"
+                f"</tr>"
+            )
+
+        # ── Assignee rows ─────────────────────────────────────────────────────
+        assignee_rows = []
+        for aname, ast in sorted(assignee_stats.items(), key=lambda x: -x[1]["pts"]):
+            ap = round(ast["done_pts"] / ast["pts"] * 100) if ast["pts"] else 0
+            assignee_rows.append(
+                f"<tr>"
+                f"<td><strong>{aname}</strong></td>"
+                f"<td style='text-align:center;'>{ast['total']}</td>"
+                f"<td style='text-align:center;'>{ast['done']}</td>"
+                f"<td style='text-align:center;'>{ast['pts']}</td>"
+                f"<td style='text-align:center;'>{ast['done_pts']}</td>"
+                f"<td>{bar(ap)} &nbsp;{ap}%</td>"
+                f"</tr>"
+            )
+
+        # ── Status breakdown ──────────────────────────────────────────────────
+        status_rows = "".join(
+            f"<tr><td>{status_badge(s)}</td>"
+            f"<td style='text-align:center;'>{c}</td>"
+            f"<td style='text-align:center;'>{round(c/n_total*100) if n_total else 0}%</td></tr>"
+            for s, c in sorted(status_counts.items(), key=lambda x: -x[1])
+        )
+
+        td = "padding:8px 12px;border-bottom:1px solid #e0e0e0;"
+        th = ("padding:8px 12px;background:#f6f8fa;font-size:11px;letter-spacing:.5px;"
+              "text-transform:uppercase;border-bottom:2px solid #d0d7de;text-align:left;")
+
+        self._html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sprint Report — {self._sprint_label}</title>
+<style>
+  body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+          color:#1f2328;background:#ffffff;margin:0;padding:32px; }}
+  h1   {{ font-size:22px;font-weight:700;margin:0 0 4px; }}
+  h2   {{ font-size:14px;font-weight:600;margin:28px 0 10px;color:#57606a;
+          text-transform:uppercase;letter-spacing:.8px; }}
+  .meta {{ font-size:12px;color:#57606a;margin-bottom:28px; }}
+  .stat-grid {{ display:flex;gap:20px;margin-bottom:28px;flex-wrap:wrap; }}
+  .stat-card {{ background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;
+                padding:16px 20px;min-width:130px; }}
+  .stat-card .val {{ font-size:28px;font-weight:700;color:#1f2328; }}
+  .stat-card .lbl {{ font-size:11px;color:#57606a;text-transform:uppercase;
+                     letter-spacing:.5px;margin-top:2px; }}
+  table {{ border-collapse:collapse;width:100%;font-size:13px; }}
+  th    {{ {th} }}
+  td    {{ {td} }}
+  tr:last-child td {{ border-bottom:none; }}
+  tr:hover td {{ background:#f6f8fa; }}
+  .progress-wrap {{ background:#e0e0e0;border-radius:4px;height:10px;
+                    width:100%;margin-top:6px; }}
+  .progress-fill {{ background:#3fb950;border-radius:4px;height:10px; }}
+</style>
+</head>
+<body>
+<h1>Sprint Report</h1>
+<div class="meta">{self._sprint_label} &nbsp;·&nbsp; Generated {today}</div>
+
+<div class="stat-grid">
+  <div class="stat-card"><div class="val">{n_total}</div><div class="lbl">Total Stories</div></div>
+  <div class="stat-card"><div class="val">{n_done}</div><div class="lbl">Done</div></div>
+  <div class="stat-card"><div class="val">{total_pts}</div><div class="lbl">Total Points</div></div>
+  <div class="stat-card"><div class="val">{done_pts}</div><div class="lbl">Points Done</div></div>
+  <div class="stat-card">
+    <div class="val">{pct_done}%</div>
+    <div class="lbl">Velocity</div>
+    <div class="progress-wrap"><div class="progress-fill" style="width:{pct_done}%;"></div></div>
+  </div>
+</div>
+
+<h2>Status Breakdown</h2>
+<table>
+  <tr><th>Status</th><th>Count</th><th>%</th></tr>
+  {status_rows}
+</table>
+
+<h2>By Assignee</h2>
+<table>
+  <tr>
+    <th>Name</th><th>Stories</th><th>Done</th>
+    <th>Pts</th><th>Pts Done</th><th>Progress</th>
+  </tr>
+  {"".join(assignee_rows)}
+</table>
+
+<h2>All Stories</h2>
+<table>
+  <tr>
+    <th>Key</th><th>Summary</th><th>Assignee</th><th>Status</th>
+    <th>Priority</th><th>Pts</th><th>Due</th><th>Type</th>
+  </tr>
+  {"".join(story_rows)}
+</table>
+</body>
+</html>"""
+
+        self._browser.setHtml(self._html)
+
+    def _save_html(self):
+        from PyQt6.QtWidgets import QFileDialog
+        slug = re.sub(r"[^\w\-]", "-", self._sprint_label)[:60]
+        suggested = f"sprint-report-{slug}-{date.today()}.html"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sprint Report", suggested,
+            "HTML Files (*.html);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._html)
+            QMessageBox.information(self, "Saved", f"Report saved to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", str(e))
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -2300,6 +2615,12 @@ class MainWindow(QMainWindow):
         self.export_btn.clicked.connect(self._export_stories)
         self.export_btn.setEnabled(False)
         fb_row2.addWidget(self.export_btn)
+        self.report_btn = QPushButton("📊  Sprint Report")
+        self.report_btn.setObjectName("toolbar_btn")
+        self.report_btn.setToolTip("Generate an HTML report for the current sprint")
+        self.report_btn.clicked.connect(self._open_sprint_report)
+        self.report_btn.setEnabled(False)
+        fb_row2.addWidget(self.report_btn)
         fb_row2.addStretch()
         fb_row2.addWidget(QLabel("ASSIGNEE"))
         self.assignee_filter_combo = QComboBox()
@@ -2648,6 +2969,7 @@ class MainWindow(QMainWindow):
 
         self.export_btn.setEnabled(False)
         self.bulk_create_btn.setEnabled(False)
+        self.report_btn.setEnabled(False)
         self.quick_add_edit.setEnabled(False)
         self.quick_add_edit.clear()
         self.compare_combo.setEnabled(False)
@@ -3058,6 +3380,7 @@ class MainWindow(QMainWindow):
         self.bulk_create_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
+        self.report_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
         reselect = self._reselect_key
         if reselect:
@@ -3246,6 +3569,14 @@ class MainWindow(QMainWindow):
             return
 
         self.edit_panel.load_issue(issue)
+        # Re-wire attach button to current issue key
+        try:
+            self.edit_panel.attach_btn.clicked.disconnect()
+        except Exception:
+            pass
+        self.edit_panel.attach_btn.clicked.connect(
+            lambda: self._attach_file_to_issue(key)
+        )
         self._spawn(
             self._client.get_issue_transitions, key,
             on_result=self.edit_panel.set_transitions,
@@ -4048,6 +4379,64 @@ class MainWindow(QMainWindow):
         else:
             errors = result.get("errorMessages", []) if isinstance(result, dict) else []
             QMessageBox.critical(self, "Quick Add Failed", "\n".join(errors) or "Unknown error.")
+
+    # ── Attach File ───────────────────────────────────────────────────────────
+    def _attach_file_to_issue(self, key: str):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, f"Attach File(s) to {key}", "",
+            "All Files (*)"
+        )
+        if not paths:
+            return
+        total = len(paths)
+        self._busy(True)
+        self._status(f"Attaching {total} file(s) to {key}…")
+
+        def _do_attach():
+            results = []
+            for path in paths:
+                try:
+                    self._client.attach_file(key, path)
+                    results.append((path, None))
+                except Exception as e:
+                    results.append((path, str(e)))
+            return results
+
+        def _on_done(results):
+            self._busy(False)
+            import os
+            ok  = [r for r in results if r[1] is None]
+            err = [r for r in results if r[1] is not None]
+            if not err:
+                names = ", ".join(os.path.basename(r[0]) for r in ok)
+                QMessageBox.information(
+                    self, "Attached",
+                    f"✓ Successfully attached {len(ok)} file(s) to {key}:\n{names}"
+                )
+                self._status(f"✓ {len(ok)} file(s) attached to {key}.")
+            else:
+                lines = [f"✓ {len(ok)} attached successfully."] if ok else []
+                lines += [f"✗ {os.path.basename(r[0])}: {r[1]}" for r in err]
+                QMessageBox.warning(self, "Attach — Partial Failure", "\n".join(lines))
+                self._status(f"⚠ {len(ok)} attached, {len(err)} failed for {key}.")
+
+        self._spawn(_do_attach, on_result=_on_done)
+
+    # ── Sprint Report ─────────────────────────────────────────────────────────
+    def _open_sprint_report(self):
+        if not self._issues:
+            return
+        sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
+        dlg = SprintReportDialog(
+            issues=self._issues,
+            sprint_label=sprint_label,
+            sp_field=self._sp_field,
+            fl_field=self.edit_panel._fl_field,
+            base_url=self.edit_panel._base_url,
+            adf_to_text_fn=self.edit_panel._adf_to_text,
+            parent=self,
+        )
+        dlg.exec()
 
     def _check_for_updates(self):
         self._status("Checking for updates…")
