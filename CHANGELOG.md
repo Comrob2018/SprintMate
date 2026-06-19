@@ -9,6 +9,7 @@
 ### Bug Fixes
 * **Fixed HTTP 406 error on archive requests.** The `archive_issues` and `unarchive_issues` methods were routing through `_request()`, which sends `Accept: application/json` on every call. Jira's archive endpoint returns `text/plain`, causing the server to reject the request with 406 Not Acceptable before any archiving occurred. Both methods now bypass `_request()` and set `Accept: text/plain` directly, then parse the plain-text response for any error lines.
 * **Fixed HTTP 400 error on archive requests.** The request body was being sent as `{"issueIdsOrKeys": [...]}` but the Jira Data Center archive endpoint expects a bare JSON array of strings. Jackson was rejecting the object wrapper with a `START_OBJECT` deserialization error. Both `archive_issues` and `unarchive_issues` now serialize the key list directly as `["KEY-1", "KEY-2"]`.
+* **Archived stories now disappear from the board immediately.** After a successful archive, `_on_done` was calling `_load_sprint_issues()`, which re-fetches from Jira. Because Jira's search index can lag behind the archive operation, archived issues were returning in the response and reappearing in the table. The fix removes archived keys directly from `self._issues` in memory and repopulates the table locally, with no round-trip to Jira. If the currently selected story was archived, the edit panel is also cleared.
 
 ---
 
