@@ -1,6 +1,6 @@
-# SprintMate  ◈  v2.14.0
+# SprintMate  ◈  v2.14.1
 
-A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, transition statuses, attach files to issues, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint reports, all from one panel.
+A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files to issues, archive stories, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint reports, all from one panel.
 
 ---
 
@@ -100,7 +100,7 @@ The **▶ SAVE CHANGES** button is disabled until you make a change. Fields avai
 | **Description** | Full plain-text edit |
 | **Add Comment** | Optional comment posted to the story on save |
 
-The **RECENT COMMENTS** panel shows the five most recent comments on the selected story (author, date, and truncated body) with no additional API calls. Click **⤢ Expand** to view a selected comment in full.
+The **RECENT COMMENTS** panel shows the five most recent comments on the selected story. Each entry displays the author's name, the date, and a truncated preview of the body in the format `[2026-06-10] Jane Smith: Comment text…`. Click **⤢ Expand** to view a comment in full. Use **✎ Edit** or **✕ Delete** to modify or remove a posted comment (see below).
 
 The edit panel header includes four controls:
 
@@ -179,6 +179,21 @@ Progress is shown per-comment in the progress bar. Any failures are reported in 
 ### Attaching files to a story
 
 Click **📎 Attach File** in the edit panel header (visible when a story is selected) to upload one or more files directly to the current Jira issue. A file picker opens that accepts any file type and allows selecting multiple files at once. Each file is uploaded via the Jira REST API and success or failure is reported per file — a single failure does not stop the rest of the batch.
+
+### Archiving stories
+
+Click **🗄 Archive** in the filter toolbar (enabled once stories are loaded) to archive one or more stories. A searchable picker dialog lists all stories in the sprint with checkboxes; select the ones to archive and click **🗄 Archive Selected**. A confirmation dialog explains the consequences before anything is sent.
+
+Archiving calls `POST /rest/api/2/issue/archive` (requires Jira Data Center 8.1 or later). Archived issues become read-only and are removed from boards, backlogs, and search results. All data is preserved in the database and issues can be restored from Jira administration.
+
+### Editing and deleting comments
+
+The RECENT COMMENTS panel includes two additional buttons when a story with comments is loaded:
+
+- **✎ Edit** — opens a pre-filled text editor for the selected comment. If the story has more than one comment, a picker dialog lets you choose which one to edit. Saves via `PUT /rest/api/2/issue/{key}/comment/{id}`.
+- **✕ Delete** — shows the comment author and a preview in a confirmation dialog before permanently deleting it via `DELETE /rest/api/2/issue/{key}/comment/{id}`. Jira's own permission rules apply — you can only delete comments you authored unless you have admin rights.
+
+Both actions reload the story immediately so the comment panel reflects the change.
 
 ### Generating a sprint report
 
@@ -319,6 +334,31 @@ The suggested filename is auto-generated from the current project, board, sprint
 2. Click **📎 Attach File** in the edit panel header.
 3. Select one or more files in the file picker — any file type is accepted.
 4. SprintMate uploads each file to the Jira issue. A confirmation dialog reports which files succeeded and which (if any) failed.
+
+---
+
+### How to archive stories
+
+1. Load the sprint containing the stories you want to archive.
+2. Click **🗄 Archive** in the filter toolbar.
+3. Use the search box to find stories if needed, then tick the checkboxes next to each story to archive.
+4. Click **🗄 Archive Selected** and confirm the prompt.
+5. The sprint view refreshes automatically. Archived stories are removed from boards and search results but can be restored from Jira administration.
+
+> Archiving requires Jira Data Center 8.1 or later.
+
+---
+
+### How to edit or delete a posted comment
+
+1. Click the story whose comment you want to change.
+2. In the **RECENT COMMENTS** panel, click **✎ Edit** or **✕ Delete**.
+3. If the story has more than one comment, a picker dialog appears — select the comment you want to act on.
+4. **Edit** — modify the text in the editor and click **Save Comment**.  
+   **Delete** — review the preview in the confirmation dialog and click **Yes** to permanently remove it.
+5. The story reloads automatically so the comment panel reflects the change.
+
+> You can only delete comments you authored unless you have Jira admin rights.
 
 ---
 
