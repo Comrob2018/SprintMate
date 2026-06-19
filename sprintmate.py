@@ -4661,7 +4661,9 @@ class MainWindow(QMainWindow):
             if not errors:
                 QMessageBox.information(
                     self, "Archived",
-                    f"✓ Successfully archived {n_ok} issue(s)."
+                    f"✓ Successfully archived {n_ok} issue(s).\n\n"
+                    "Archived issues are read-only and removed from boards and search results. "
+                    "They can be restored from Jira administration."
                 )
                 self._status(f"✓ Archived {n_ok} issue(s).")
             else:
@@ -4671,7 +4673,24 @@ class MainWindow(QMainWindow):
                     f"✓ {n_ok} archived.\n✗ {len(errors)} error(s):\n{detail}"
                 )
                 self._status(f"⚠ Archived {n_ok}, {len(errors)} error(s).")
-            self._load_sprint_issues()
+            # Remove archived keys from the local issue list immediately so they
+            # disappear from the table even if Jira's index hasn't caught up yet.
+            archived_set = set(keys_to_archive)
+            self._issues = [i for i in self._issues if i.get("key") not in archived_set]
+            self._populate_table(self._issues)
+            self._update_velocity_bar()
+            self._populate_assignee_filter()
+            self.story_count_lbl.setText(f"{len(self._issues)} stories")
+            # Clear edit panel if the selected story was archived
+            if self.edit_panel.current_key in archived_set:
+                self.edit_panel.current_key = None
+                self.edit_panel.title_lbl.setText("Select a story to edit")
+                self.edit_panel.key_lbl.setText("")
+                self.edit_panel.status_badge.setText("")
+                self.edit_panel.save_btn.setEnabled(False)
+                self.edit_panel.attach_btn.setEnabled(False)
+                self.edit_panel.open_jira_btn.setEnabled(False)
+                self.edit_panel.copy_key_btn.setEnabled(False)
 
         self._spawn(_do_archive, on_result=_on_done,
                     on_error=lambda e: (
