@@ -1,6 +1,6 @@
-# SprintMate  ◈  v2.13.2
+# SprintMate  ◈  v2.14.0
 
-A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, transition statuses, import bulk comments, bulk-create stories from CSV, and export sprint data, all from one panel.
+A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, transition statuses, attach files to issues, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint reports, all from one panel.
 
 ---
 
@@ -102,12 +102,13 @@ The **▶ SAVE CHANGES** button is disabled until you make a change. Fields avai
 
 The **RECENT COMMENTS** panel shows the five most recent comments on the selected story (author, date, and truncated body) with no additional API calls. Click **⤢ Expand** to view a selected comment in full.
 
-The edit panel header includes three controls:
+The edit panel header includes four controls:
 
 | Control | Action |
 |---|---|
 | **⎘** | Copies the current issue key to the clipboard |
 | **⎋ Open in Jira** | Opens the current story in your browser |
+| **📎 Attach File** | Opens a file picker to attach one or more files to the current story |
 
 Click **▶ SAVE CHANGES** (or press `Ctrl+S`) — the app updates Jira and re-selects the saved story automatically.
 
@@ -174,6 +175,21 @@ A preview dialog shows all parsed entries with their match status before anythin
 - **Cross-post** — if a story with the same summary and assignee is found on the other instance, the comment is posted there too. Cross-post targets are highlighted in cyan in the preview. Cross-posting uses fuzzy JQL summary matching and falls back to exact match if the contains search returns nothing.
 
 Progress is shown per-comment in the progress bar. Any failures are reported in the status bar at completion without aborting the rest of the batch.
+
+### Attaching files to a story
+
+Click **📎 Attach File** in the edit panel header (visible when a story is selected) to upload one or more files directly to the current Jira issue. A file picker opens that accepts any file type and allows selecting multiple files at once. Each file is uploaded via the Jira REST API and success or failure is reported per file — a single failure does not stop the rest of the batch.
+
+### Generating a sprint report
+
+Click **📊 Sprint Report** in the filter bar (enabled once stories are loaded) to generate an HTML report for the current sprint. The report includes:
+
+- **Stat cards** — total stories, done count, total points, done points, and velocity percentage with a visual progress bar.
+- **Status breakdown** — story count and percentage per status, with colour-coded badges.
+- **By assignee** — per-person story count, done count, total and done points, and a visual progress bar.
+- **All stories** — a full table with key (hyperlinked to Jira when a URL is configured), summary, assignee, status, priority, story points, due date, and issue type. Overdue due dates are highlighted in red; dates within 3 days are highlighted in amber.
+
+The report renders inline in a dialog and can be saved as an HTML file via **⬇ Save as HTML**.
 
 ### Exporting stories
 
@@ -294,6 +310,24 @@ The suggested filename is auto-generated from the current project, board, sprint
 3. Click **📄 Import** (or press `Ctrl+I`) and select your file.
 4. Review the preview dialog. **Matched** entries (key found in the current sprint) are ready to post. **Unmatched** entries are skipped. Any entries that also match a story on the other instance are highlighted in cyan as cross-post targets.
 5. Click **OK** to post. Progress is shown per comment; any failures are reported in the status bar without stopping the rest of the batch.
+
+---
+
+### How to attach a file to a story
+
+1. Load a sprint and click the story you want to attach a file to.
+2. Click **📎 Attach File** in the edit panel header.
+3. Select one or more files in the file picker — any file type is accepted.
+4. SprintMate uploads each file to the Jira issue. A confirmation dialog reports which files succeeded and which (if any) failed.
+
+---
+
+### How to generate a sprint report
+
+1. Load the sprint you want to report on.
+2. Click **📊 Sprint Report** in the filter bar.
+3. The report dialog opens with stat cards, a status breakdown, a per-assignee summary, and a full story table.
+4. Optionally click **⬇ Save as HTML** to save the report to a file — the suggested filename includes the sprint name and today's date.
 
 ---
 
