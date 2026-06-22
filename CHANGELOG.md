@@ -1,7 +1,12 @@
 # SprintMate Changelog
+## [2.15.1] — 2026-06-22
+### Features
+* **Custom display names for instances.** Added a "Display Name" field to the settings dialog for each instance. When set, the name replaces "Primary" / "Secondary" everywhere it appears in the app — the top bar mode indicator, the Switch Instance status message, the sprint load status, and the clone dialog instance selector. Falls back to "PRIMARY" / "SECONDARY" if left blank. Values are persisted via `QSettings` as `primary_display_name` and `secondary_display_name`. A new `_instance_label(mode)` helper on `MainWindow` centralises the fallback logic so all call sites stay consistent.
+
+---
+
 ## [2.15.0] — 2026-06-22
 ### Features
-
 * **Clone stories to any project or instance.** Added a "⎘ Clone" button to the story edit panel header. Opens a dialog with three sections: a target instance selector (current instance, or the other saved instance if credentials exist), a target project dropdown populated lazily from the selected instance, and editable fields for Summary (pre-filled as `[Clone] Original summary`), Description, and Assignee. Executes via `POST /rest/api/2/issue` against the target `JiraClient`. On success, shows the new issue key with **Copy Key** and **Open in Jira** action buttons.
 
 ---
