@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.16.0
+# SprintMate  ◈  v2.16.1
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files to issues, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint and people reports, all from one panel.
 
