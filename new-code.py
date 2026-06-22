@@ -9,9 +9,16 @@
         self._tabs.addTab(sprint_tab, "📊  Sprint Report")
         # ── Tab 2: People Report ──
 
-self._browser.setStyleSheet(
-    f"background: #ffffff; color: #111111; border: 1px solid {BORDER}; border-radius: 6px;"
-)
+sprint_btn_row = QHBoxLayout()
+self._save_sprint_btn = QPushButton("⬇  Save as HTML")
+self._save_sprint_btn.setObjectName("toolbar_btn")
+self._save_sprint_btn.clicked.connect(self._save_html)
+self._save_sprint_btn.setEnabled(False)
+sprint_btn_row.addWidget(self._save_sprint_btn)
+sprint_btn_row.addStretch()
+sprint_layout.addLayout(sprint_btn_row)
+self._tabs.addTab(sprint_tab, "📊  Sprint Report")
+
 
 
 
