@@ -41,6 +41,7 @@ Use the **PRIMARY / SECONDARY** toggle at the top of the settings dialog to swit
 
 | Field | Value |
 |---|---|
+| **Display Name** | Display name of instance, e.g. `Sentinel` or `ACyD` |
 | **Jira URL** | Base URL of the instance, e.g. `https://jira.yourcompany.com` |
 | **PAT Token** | Personal Access Token generated in Jira → Profile → Personal Access Tokens |
 | **Token Expiry** | Optional expiry date — SprintMate will warn you when it is approaching |
