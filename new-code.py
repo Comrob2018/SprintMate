@@ -9,6 +9,11 @@
         self._tabs.addTab(sprint_tab, "📊  Sprint Report")
         # ── Tab 2: People Report ──
 
+self._browser.setStyleSheet(
+    f"background: #ffffff; color: #111111; border: 1px solid {BORDER}; border-radius: 6px;"
+)
+
+
 
 # Before — two separate _do definitions, scope_label branch-scoped:
 def _generate_sprint_report(self):
