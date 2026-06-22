@@ -95,9 +95,9 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.14.2"
+APP_VERSION  = "2.16.0"
 GITHUB_RAW_URL = (
-    "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
+    "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
 )
 
 STYLESHEET = f"""
@@ -473,6 +473,69 @@ class JiraClient:
         except Exception:
             return []
 
+    def get_all_sprints(self, board_id: int) -> list:
+        """Fetch all sprints (active, future, closed) for a board."""
+        all_sprints = []
+        start = 0
+        max_results = 50
+        while True:
+            url = (f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint"
+                   f"?maxResults={max_results}&startAt={start}")
+            req = urllib.request.Request(url, headers=self.headers)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+            except Exception:
+                break
+            batch = data.get("values", [])
+            all_sprints.extend(batch)
+            if data.get("isLast", True) or len(batch) < max_results:
+                break
+            start += max_results
+        return all_sprints
+
+    def get_issues_for_people_report(self, assignees: list[str],
+                                     date_from: str = "", date_to: str = "",
+                                     sprint_id: int = 0, board_id: int = 0) -> list:
+        """Fetch all issues assigned to the given users within a date range or sprint."""
+        sp = self.story_point_field_id
+        fields = ",".join([
+            "summary", "assignee", "status", "priority", "issuetype",
+            "duedate", sp, "created", "resolutiondate", "comment",
+        ])
+        assignee_jql = " OR ".join(f'assignee = "{a}"' for a in assignees)
+        if sprint_id and board_id:
+            jql = f"({assignee_jql}) AND sprint = {sprint_id}"
+        elif date_from and date_to:
+            jql = f'({assignee_jql}) AND updated >= "{date_from}" AND updated <= "{date_to}"'
+        elif date_from:
+            jql = f'({assignee_jql}) AND updated >= "{date_from}"'
+        elif date_to:
+            jql = f'({assignee_jql}) AND updated <= "{date_to}"'
+        else:
+            jql = f"({assignee_jql})"
+        jql += " ORDER BY assignee ASC, updated DESC"
+
+        all_issues = []
+        start = 0
+        max_results = 100
+        while True:
+            encoded = urllib.parse.quote(jql)
+            url = (f"{self.base_url}/rest/api/{self.api_version}/search"
+                   f"?jql={encoded}&maxResults={max_results}&startAt={start}&fields={fields}")
+            req = urllib.request.Request(url, headers=self.headers)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(f"HTTP {e.code}: {e.read().decode(errors='replace')}")
+            batch = data.get("issues", [])
+            all_issues.extend(batch)
+            if len(batch) < max_results:
+                break
+            start += max_results
+        return all_issues
+
     def get_sprints(self, board_id: int):
         url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint?state=active,future&maxResults=20"
         req = urllib.request.Request(url, headers=self.headers)
@@ -626,6 +689,21 @@ class JiraClient:
             except Exception:
                 break
         return all_users
+
+    def clone_issue(self, project_key: str, summary: str,
+                    description: str = "", assignee_name: str = "",
+                    issue_type: str = "Story") -> dict:
+        """Create a new issue — used as the target of a clone operation."""
+        fields: dict = {
+            "project":   {"key": project_key},
+            "summary":   summary,
+            "issuetype": {"name": issue_type},
+        }
+        if description:
+            fields["description"] = description
+        if assignee_name:
+            fields["assignee"] = {"name": assignee_name}
+        return self._request("POST", "issue", {"fields": fields})
 
     def archive_issues(self, issue_keys: list[str]) -> dict:
         """Archive one or more issues. Requires Jira Data Center 8.1+."""
@@ -1343,6 +1421,14 @@ class SettingsDialog(QDialog):
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
+        self.display_name_edit = QLineEdit()
+        self.display_name_edit.setPlaceholderText("e.g. Production, Staging, Dev…")
+        form.addRow("Display Name:", self.display_name_edit)
+        _dn_hint = QLabel("Optional. Replaces 'Primary' / 'Secondary' labels throughout the app.")
+        _dn_hint.setObjectName("dim")
+        _dn_hint.setWordWrap(True)
+        form.addRow("", _dn_hint)
+
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://jira.yourcompany.com")
         form.addRow("Jira URL:", self.url_edit)
@@ -1421,6 +1507,7 @@ class SettingsDialog(QDialog):
                 "default_board":  settings.get("secondary_default_board", ""),
                 "filter_projects": settings.get("secondary_filter_projects", ""),
                 "filter_boards":  settings.get("secondary_filter_boards", ""),
+                "display_name":   settings.get("secondary_display_name", ""),
             },
             JiraClient.MODE_PRIMARY: {
                 "url":            settings.get("primary_url", ""),
@@ -1430,6 +1517,7 @@ class SettingsDialog(QDialog):
                 "default_board":  settings.get("primary_default_board", ""),
                 "filter_projects": settings.get("primary_filter_projects", ""),
                 "filter_boards":  settings.get("primary_filter_boards", ""),
+                "display_name":   settings.get("primary_display_name", ""),
             },
         }
         self._set_mode(settings.get("mode", JiraClient.MODE_SECONDARY))
@@ -1443,12 +1531,15 @@ class SettingsDialog(QDialog):
             self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
             self._data[self._mode]["filter_projects"] = self.filter_projects_edit.text().strip()
             self._data[self._mode]["filter_boards"]   = self.filter_boards_edit.text().strip()
+            self._data[self._mode]["display_name"]    = self.display_name_edit.text().strip()
 
         self._mode = mode
         is_secondary = mode == JiraClient.MODE_SECONDARY
         self.secondary_btn.setChecked(is_secondary)
         self.primary_btn.setChecked(not is_secondary)
-        self.instance_lbl.setText(f"{'SECONDARY' if is_secondary else 'PRIMARY'} INSTANCE")
+        default_label = "SECONDARY" if is_secondary else "PRIMARY"
+        custom_name   = self._data[mode].get("display_name", "").strip()
+        self.instance_lbl.setText(f"{custom_name or default_label} INSTANCE")
 
         self.url_edit.setText(self._data[mode]["url"])
         self.token_edit.setText(self._data[mode]["token"])
@@ -1457,6 +1548,7 @@ class SettingsDialog(QDialog):
         self.default_board_edit.setText(self._data[mode].get("default_board", ""))
         self.filter_projects_edit.setText(self._data[mode].get("filter_projects", ""))
         self.filter_boards_edit.setText(self._data[mode].get("filter_boards", ""))
+        self.display_name_edit.setText(self._data[mode].get("display_name", ""))
         self.status_lbl.setText("")
 
     def _test(self):
@@ -1491,6 +1583,7 @@ class SettingsDialog(QDialog):
         self._data[self._mode]["default_board"] = self.default_board_edit.text().strip()
         self._data[self._mode]["filter_projects"] = self.filter_projects_edit.text().strip()
         self._data[self._mode]["filter_boards"]   = self.filter_boards_edit.text().strip()
+        self._data[self._mode]["display_name"]    = self.display_name_edit.text().strip()
         self.accept()
 
     def get_settings(self):
@@ -1499,9 +1592,11 @@ class SettingsDialog(QDialog):
             "secondary_url":   self._data[JiraClient.MODE_SECONDARY]["url"],
             "secondary_token": self._data[JiraClient.MODE_SECONDARY]["token"],
             "secondary_token_expiry": self._data[JiraClient.MODE_SECONDARY].get("token_expiry", ""),
+            "secondary_display_name": self._data[JiraClient.MODE_SECONDARY].get("display_name", ""),
             "primary_url":       self._data[JiraClient.MODE_PRIMARY]["url"],
             "primary_token":     self._data[JiraClient.MODE_PRIMARY]["token"],
             "primary_token_expiry": self._data[JiraClient.MODE_PRIMARY].get("token_expiry", ""),
+            "primary_display_name":  self._data[JiraClient.MODE_PRIMARY].get("display_name", ""),
             "url":   self._data[self._mode]["url"],
             "token": self._data[self._mode]["token"],
             "secondary_default_project": self._data[JiraClient.MODE_SECONDARY]["default_project"],
@@ -1561,14 +1656,15 @@ class StoryEditPanel(QFrame):
         self.open_jira_btn.setFixedHeight(28)
         self.open_jira_btn.setEnabled(False)
         self.open_jira_btn.clicked.connect(self._open_in_jira)
-        self.attach_btn = QPushButton("📎  Attach File")
-        self.attach_btn.setToolTip("Attach a file to this Jira issue")
-        self.attach_btn.setFixedHeight(28)
-        self.attach_btn.setEnabled(False)
+        self.clone_btn = QPushButton("⎘  Clone")
+        self.clone_btn.setToolTip("Clone this story to a project or instance")
+        self.clone_btn.setFixedHeight(28)
+        self.clone_btn.setEnabled(False)
         hdr.addWidget(self.title_lbl, 1)
         hdr.addWidget(self.key_lbl)
         hdr.addWidget(self.copy_key_btn)
         hdr.addWidget(self.open_jira_btn)
+        hdr.addWidget(self.clone_btn)
         hdr.addWidget(self.attach_btn)
         layout.addLayout(hdr)
 
@@ -1883,6 +1979,7 @@ class StoryEditPanel(QFrame):
         self.save_btn.setToolTip("No changes to save")
         self.copy_key_btn.setEnabled(True)
         self.open_jira_btn.setEnabled(True)
+        self.clone_btn.setEnabled(True)
         self.attach_btn.setEnabled(True)
 
     def _load_issue_fields(self, issue: dict):
@@ -2194,13 +2291,14 @@ class ExportStoriesDialog(QDialog):
 
 # ── Sprint Report Dialog ──────────────────────────────────────────────────────
 class SprintReportDialog(QDialog):
-    """Generates and displays an HTML sprint report with stats and story table."""
+    """Sprint report dialog with two tabs: Sprint Report and People Report."""
 
     def __init__(self, issues: list, sprint_label: str, sp_field: str,
-                 fl_field: str, base_url: str, adf_to_text_fn, parent=None):
+                 fl_field: str, base_url: str, adf_to_text_fn,
+                 client=None, board_id: int = 0, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Sprint Report")
-        self.setMinimumSize(900, 680)
+        self.setMinimumSize(960, 720)
         self.setStyleSheet(parent.styleSheet() if parent else "")
 
         self._issues       = issues
@@ -2209,19 +2307,79 @@ class SprintReportDialog(QDialog):
         self._fl_field     = fl_field
         self._base_url     = base_url
         self._adf_to_text  = adf_to_text_fn
+        self._client       = client
+        self._board_id     = board_id
         self._html         = ""
+        self._people_html  = ""
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        title = QLabel("◈  SPRINT REPORT")
-        title.setObjectName("heading")
-        layout.addWidget(title)
+        self._tabs = QTabWidget()
+        layout.addWidget(self._tabs, 1)
 
-        sub = QLabel(sprint_label)
-        sub.setObjectName("dim")
-        layout.addWidget(sub)
+        # ── Tab 1: Sprint Report ──────────────────────────────────────────────
+        sprint_tab = QWidget()
+        sprint_layout = QVBoxLayout(sprint_tab)
+        sprint_layout.setSpacing(10)
+        sprint_layout.setContentsMargins(0, 12, 0, 0)
+
+        # Controls row — mirrors People tab layout
+        sr_ctrl_row = QHBoxLayout()
+        sr_ctrl_row.setSpacing(12)
+
+        # -- Scope: Sprint or Date Range
+        sr_scope_grp = QGroupBox("SCOPE")
+        sr_scope_inner = QVBoxLayout(sr_scope_grp)
+        sr_scope_inner.setSpacing(6)
+
+        self._sr_scope_sprint_rb = QRadioButton("Sprint")
+        self._sr_scope_date_rb   = QRadioButton("Date Range")
+        self._sr_scope_sprint_rb.setChecked(True)
+        sr_scope_inner.addWidget(self._sr_scope_sprint_rb)
+        sr_scope_inner.addWidget(self._sr_scope_date_rb)
+
+        self._sr_sprint_combo = QComboBox()
+        self._sr_sprint_combo.setMinimumWidth(220)
+        self._sr_sprint_combo.addItem("Loading sprints…")
+        self._sr_sprint_combo.setEnabled(False)
+        sr_scope_inner.addWidget(self._sr_sprint_combo)
+
+        sr_date_row = QHBoxLayout()
+        self._sr_date_from = QLineEdit()
+        self._sr_date_from.setPlaceholderText("From  YYYY-MM-DD")
+        self._sr_date_from.setEnabled(False)
+        self._sr_date_to = QLineEdit()
+        self._sr_date_to.setPlaceholderText("To  YYYY-MM-DD")
+        self._sr_date_to.setEnabled(False)
+        sr_date_row.addWidget(self._sr_date_from)
+        sr_date_row.addWidget(QLabel("→"))
+        sr_date_row.addWidget(self._sr_date_to)
+        sr_scope_inner.addLayout(sr_date_row)
+        sr_ctrl_row.addWidget(sr_scope_grp)
+        sr_ctrl_row.addStretch()
+        sprint_layout.addLayout(sr_ctrl_row)
+
+        def _on_sr_scope_toggle():
+            use_sprint = self._sr_scope_sprint_rb.isChecked()
+            self._sr_sprint_combo.setEnabled(use_sprint and self._sr_sprint_combo.count() > 0)
+            self._sr_date_from.setEnabled(not use_sprint)
+            self._sr_date_to.setEnabled(not use_sprint)
+
+        self._sr_scope_sprint_rb.toggled.connect(_on_sr_scope_toggle)
+        self._sr_scope_date_rb.toggled.connect(_on_sr_scope_toggle)
+
+        # Generate button + status
+        sr_gen_row = QHBoxLayout()
+        self._sr_gen_btn = QPushButton("▶  Generate Sprint Report")
+        self._sr_gen_btn.setObjectName("save_btn")
+        self._sr_gen_btn.clicked.connect(self._generate_sprint_report)
+        sr_gen_row.addWidget(self._sr_gen_btn)
+        self._sr_status = QLabel("")
+        self._sr_status.setObjectName("dim")
+        sr_gen_row.addWidget(self._sr_status, 1)
+        sprint_layout.addLayout(sr_gen_row)
 
         from PyQt6.QtWidgets import QTextBrowser
         self._browser = QTextBrowser()
@@ -2229,32 +2387,245 @@ class SprintReportDialog(QDialog):
         self._browser.setStyleSheet(
             f"background: #ffffff; color: #111111; border: 1px solid {BORDER}; border-radius: 6px;"
         )
-        layout.addWidget(self._browser, 1)
+        sprint_layout.addWidget(self._browser, 1)
 
+        sprint_btn_row = QHBoxLayout()
+        self._save_sprint_btn = QPushButton("⬇  Save as HTML")
+        self._save_sprint_btn.setObjectName("toolbar_btn")
+        self._save_sprint_btn.clicked.connect(self._save_html)
+        self._save_sprint_btn.setEnabled(False)
+        sprint_btn_row.addWidget(self._save_sprint_btn)
+        sprint_btn_row.addStretch()
+        sprint_layout.addLayout(sprint_btn_row)
+        self._tabs.addTab(sprint_tab, "📊  Sprint Report")
+        # ── Tab 2: People Report ──────────────────────────────────────────────
+        people_tab = QWidget()
+        people_layout = QVBoxLayout(people_tab)
+        people_layout.setSpacing(10)
+        people_layout.setContentsMargins(0, 12, 0, 0)
+
+        # Controls row
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(12)
+
+        # -- Scope: Sprint or Date Range
+        scope_grp = QGroupBox("SCOPE")
+        scope_inner = QVBoxLayout(scope_grp)
+        scope_inner.setSpacing(6)
+
+        self._scope_sprint_rb = QRadioButton("Sprint")
+        self._scope_date_rb   = QRadioButton("Date Range")
+        self._scope_sprint_rb.setChecked(True)
+        scope_inner.addWidget(self._scope_sprint_rb)
+        scope_inner.addWidget(self._scope_date_rb)
+
+        # Sprint selector
+        self._sprint_scope_combo = QComboBox()
+        self._sprint_scope_combo.setMinimumWidth(220)
+        self._sprint_scope_combo.addItem("Loading sprints…")
+        self._sprint_scope_combo.setEnabled(False)
+        scope_inner.addWidget(self._sprint_scope_combo)
+
+        # Date range
+        date_row = QHBoxLayout()
+        self._date_from = QLineEdit()
+        self._date_from.setPlaceholderText("From  YYYY-MM-DD")
+        self._date_from.setEnabled(False)
+        self._date_to = QLineEdit()
+        self._date_to.setPlaceholderText("To  YYYY-MM-DD")
+        self._date_to.setEnabled(False)
+        date_row.addWidget(self._date_from)
+        date_row.addWidget(QLabel("→"))
+        date_row.addWidget(self._date_to)
+        scope_inner.addLayout(date_row)
+        ctrl_row.addWidget(scope_grp)
+
+        def _on_scope_toggle():
+            use_sprint = self._scope_sprint_rb.isChecked()
+            self._sprint_scope_combo.setEnabled(use_sprint and self._sprint_scope_combo.count() > 0)
+            self._date_from.setEnabled(not use_sprint)
+            self._date_to.setEnabled(not use_sprint)
+
+        self._scope_sprint_rb.toggled.connect(_on_scope_toggle)
+        self._scope_date_rb.toggled.connect(_on_scope_toggle)
+
+        # -- People selector
+        people_grp = QGroupBox("PEOPLE")
+        people_inner = QVBoxLayout(people_grp)
+        people_inner.setSpacing(6)
+
+        people_inner.addWidget(QLabel("Select from sprint:"))
+        self._people_list = QListWidget()
+        self._people_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        self._people_list.setMaximumHeight(120)
+
+        # Populate from current sprint assignees
+        seen = set()
+        for iss in issues:
+            aobj = (iss.get("fields") or {}).get("assignee") or {}
+            name = aobj.get("name") or aobj.get("accountId") or ""
+            display = aobj.get("displayName") or name
+            if name and name not in seen:
+                seen.add(name)
+                item = QListWidgetItem(display)
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                self._people_list.addItem(item)
+
+        people_inner.addWidget(self._people_list)
+        people_inner.addWidget(QLabel("Add more (comma-separated usernames):"))
+        self._extra_people = QLineEdit()
+        self._extra_people.setPlaceholderText("e.g. jsmith, adoe")
+        people_inner.addWidget(self._extra_people)
+        ctrl_row.addWidget(people_grp, 1)
+
+        people_layout.addLayout(ctrl_row)
+
+        # Generate button + status
+        gen_row = QHBoxLayout()
+        self._gen_btn = QPushButton("▶  Generate People Report")
+        self._gen_btn.setObjectName("save_btn")
+        self._gen_btn.clicked.connect(self._generate_people_report)
+        gen_row.addWidget(self._gen_btn)
+        self._people_status = QLabel("")
+        self._people_status.setObjectName("dim")
+        gen_row.addWidget(self._people_status, 1)
+        people_layout.addLayout(gen_row)
+
+        self._people_browser = QTextBrowser()
+        self._people_browser.setOpenExternalLinks(True)
+        self._people_browser.setStyleSheet(
+            f"background: #ffffff; color: #111111; border: 1px solid {BORDER}; border-radius: 6px;"
+        )
+        people_layout.addWidget(self._people_browser, 1)
+
+        people_btn_row = QHBoxLayout()
+        save_people_btn = QPushButton("⬇  Save as HTML")
+        save_people_btn.setObjectName("toolbar_btn")
+        save_people_btn.clicked.connect(self._save_people_html)
+        save_people_btn.setEnabled(False)
+        self._save_people_btn = save_people_btn
+        people_btn_row.addWidget(save_people_btn)
+        people_btn_row.addStretch()
+        people_layout.addLayout(people_btn_row)
+
+        self._tabs.addTab(people_tab, "👤  People Report")
+
+        # Close button row
         btn_row = QHBoxLayout()
-        save_btn = QPushButton("⬇  Save as HTML")
-        save_btn.setObjectName("toolbar_btn")
-        save_btn.clicked.connect(self._save_html)
-        btn_row.addWidget(save_btn)
         btn_row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
         layout.addLayout(btn_row)
 
-        self._build_report()
+        self._load_sprints_for_tabs()
 
-    # ── Build ─────────────────────────────────────────────────────────────────
-    def _build_report(self):
-        sp = self._sp_field
-        today = date.today().strftime("%Y-%m-%d")
+    def _load_sprints_for_tabs(self):
+        """Fetch all sprints and populate both the Sprint Report and People Report scope combos."""
+        if not self._client or not self._board_id:
+            for combo in (self._sr_sprint_combo, self._sprint_scope_combo):
+                combo.clear()
+                combo.addItem("No board available")
+            return
+
+        def _do():
+            return self._client.get_all_sprints(self._board_id)
+
+        worker = _Worker(_do)
+        worker.result.connect(self._on_sprints_loaded)
+        worker.error.connect(lambda e: (
+            self._sr_sprint_combo.addItem("Failed to load"),
+            self._sprint_scope_combo.addItem("Failed to load"),
+        ))
+        worker.start()
+        self._sprint_worker = worker
+
+    # ── Sprint Report ─────────────────────────────────────────────────────────
+    def _generate_sprint_report(self):
+        self._sr_gen_btn.setEnabled(False)
+        self._sr_status.setText("Fetching issues…")
+        self._browser.setHtml("<p style='color:#888;padding:20px;'>Loading…</p>")
+
+        # Determine scope and build the fetch callable up front so
+        # scope_label is always defined before _on_done references it.
+        use_sprint  = self._sr_scope_sprint_rb.isChecked()
+        sprint_id   = self._sr_sprint_combo.currentData() or 0 if use_sprint else 0
+        date_from   = "" if use_sprint else self._sr_date_from.text().strip()
+        date_to     = "" if use_sprint else self._sr_date_to.text().strip()
+
+        if use_sprint:
+            scope_label = self._sr_sprint_combo.currentText()
+            if not sprint_id:
+                self._sr_gen_btn.setEnabled(True)
+                self._sr_status.setText("⚠ No sprint selected.")
+                return
+        else:
+            scope_label = f"{date_from or '…'} → {date_to or '…'}"
+
+        def _do() -> list:
+            if use_sprint:
+                return self._client.get_sprint_issues(self._board_id, sprint_id)
+            # Date range — fetch via JQL search
+            jql_parts = []
+            if date_from:
+                jql_parts.append(f'updated >= "{date_from}"')
+            if date_to:
+                jql_parts.append(f'updated <= "{date_to}"')
+            jql = " AND ".join(jql_parts) if jql_parts else "updated >= -90d"
+            jql += " ORDER BY updated DESC"
+            encoded = urllib.parse.quote(jql)
+            sp = self._client.story_point_field_id
+            fields = ",".join([
+                "summary", "assignee", "status", "priority", "issuetype",
+                "duedate", sp, "comment",
+            ])
+            all_issues: list = []
+            start = 0
+            max_results = 100
+            while True:
+                url = (f"{self._client.base_url}/rest/api/{self._client.api_version}/search"
+                       f"?jql={encoded}&maxResults={max_results}&startAt={start}&fields={fields}")
+                req = urllib.request.Request(url, headers=self._client.headers)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
+                batch = data.get("issues", [])
+                all_issues.extend(batch)
+                if len(batch) < max_results:
+                    break
+                start += max_results
+            return all_issues
+
+        def _on_done(issues: list) -> None:
+            self._sr_gen_btn.setEnabled(True)
+            self._sr_status.setText(f"✓ {len(issues)} issues loaded.")
+            self._save_sprint_btn.setEnabled(True)
+            self._build_report(issues, scope_label)
+
+        def _on_err(e: str) -> None:
+            self._sr_gen_btn.setEnabled(True)
+            self._sr_status.setText(f"✗ {e}")
+            self._browser.setHtml(
+                f"<p style='color:#f78166;padding:20px;'>Error: {e}</p>"
+            )
+
+        worker = _Worker(_do)
+        worker.result.connect(_on_done)
+        worker.error.connect(_on_err)
+        worker.start()
+        self._sr_worker = worker
+
+    def _build_report(self, issues: list = None, scope_label: str = ""):
+        issues = issues if issues is not None else self._issues
+        sp     = self._sp_field
+        today  = date.today().strftime("%Y-%m-%d")
+        title  = scope_label or self._sprint_label
 
         # ── Aggregate stats ───────────────────────────────────────────────────
         total_pts = done_pts = 0
         status_counts: dict[str, int] = {}
         assignee_stats: dict[str, dict] = {}
 
-        for iss in self._issues:
+        for iss in issues:
             f = iss.get("fields", {})
             status = (f.get("status") or {}).get("name", "—")
             status_counts[status] = status_counts.get(status, 0) + 1
@@ -2312,7 +2683,7 @@ class SprintReportDialog(QDialog):
 
         # ── Story rows ────────────────────────────────────────────────────────
         story_rows = []
-        for iss in sorted(self._issues, key=lambda i: i.get("key", "")):
+        for iss in sorted(issues, key=lambda i: i.get("key", "")):
             f      = iss.get("fields", {})
             key    = iss.get("key", "")
             summ   = f.get("summary", "")
@@ -2386,7 +2757,7 @@ class SprintReportDialog(QDialog):
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Sprint Report — {self._sprint_label}</title>
+<title>Sprint Report — {title}</title>
 <style>
   body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
           color:#1f2328;background:#ffffff;margin:0;padding:32px; }}
@@ -2412,7 +2783,7 @@ class SprintReportDialog(QDialog):
 </head>
 <body>
 <h1>Sprint Report</h1>
-<div class="meta">{self._sprint_label} &nbsp;·&nbsp; Generated {today}</div>
+<div class="meta">{title} &nbsp;·&nbsp; Generated {today}</div>
 
 <div class="stat-grid">
   <div class="stat-card"><div class="val">{n_total}</div><div class="lbl">Total Stories</div></div>
@@ -2456,7 +2827,9 @@ class SprintReportDialog(QDialog):
 
     def _save_html(self):
         from PyQt6.QtWidgets import QFileDialog
-        slug = re.sub(r"[^\w\-]", "-", self._sprint_label)[:60]
+        scope = self._sr_sprint_combo.currentText() if self._sr_scope_sprint_rb.isChecked() \
+                else f"{self._sr_date_from.text()}-{self._sr_date_to.text()}"
+        slug = re.sub(r"[^\w\-]", "-", scope or self._sprint_label)[:60]
         suggested = f"sprint-report-{slug}-{date.today()}.html"
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Sprint Report", suggested,
@@ -2467,6 +2840,310 @@ class SprintReportDialog(QDialog):
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(self._html)
+            QMessageBox.information(self, "Saved", f"Report saved to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", str(e))
+
+    # ── People Report ─────────────────────────────────────────────────────────
+    def _on_sprints_loaded(self, sprints):
+        for combo in (self._sr_sprint_combo, self._sprint_scope_combo):
+            combo.clear()
+            if not sprints:
+                combo.addItem("No sprints found")
+                continue
+            for s in reversed(sprints):  # most recent first
+                state = s.get("state", "")
+                label = f"{s.get('name', '')}  [{state}]"
+                combo.addItem(label, userData=s.get("id"))
+
+        # Pre-select the current sprint in the Sprint Report combo if possible
+        for i in range(self._sr_sprint_combo.count()):
+            if self._sprint_label in (self._sr_sprint_combo.itemText(i) or ""):
+                self._sr_sprint_combo.setCurrentIndex(i)
+                break
+
+        self._sr_sprint_combo.setEnabled(
+            self._sr_scope_sprint_rb.isChecked() and bool(sprints)
+        )
+        self._sprint_scope_combo.setEnabled(
+            self._scope_sprint_rb.isChecked() and bool(sprints)
+        )
+
+    def _generate_people_report(self):
+        # Collect selected people
+        selected = []
+        for i in range(self._people_list.count()):
+            item = self._people_list.item(i)
+            if item.isSelected():
+                selected.append(item.data(Qt.ItemDataRole.UserRole))
+        extras = [n.strip() for n in self._extra_people.text().split(",") if n.strip()]
+        assignees = list(dict.fromkeys(selected + extras))  # dedupe, preserve order
+
+        if not assignees:
+            QMessageBox.warning(self, "No People Selected",
+                                "Please select at least one person or enter a username.")
+            return
+
+        # Determine scope
+        sprint_id = 0
+        date_from = ""
+        date_to   = ""
+        scope_label = ""
+
+        if self._scope_sprint_rb.isChecked():
+            sprint_id  = self._sprint_scope_combo.currentData() or 0
+            scope_label = self._sprint_scope_combo.currentText()
+        else:
+            date_from   = self._date_from.text().strip()
+            date_to     = self._date_to.text().strip()
+            scope_label = f"{date_from or '…'} → {date_to or '…'}"
+
+        self._gen_btn.setEnabled(False)
+        self._people_status.setText("Fetching issues…")
+        self._people_browser.setHtml("<p style='color:#888;padding:20px;'>Loading…</p>")
+
+        def _do():
+            return self._client.get_issues_for_people_report(
+                assignees=assignees,
+                date_from=date_from,
+                date_to=date_to,
+                sprint_id=sprint_id,
+                board_id=self._board_id,
+            )
+
+        def _on_done(issues):
+            self._gen_btn.setEnabled(True)
+            self._people_status.setText(f"✓ {len(issues)} issues fetched.")
+            self._build_people_report(issues, assignees, scope_label)
+            self._save_people_btn.setEnabled(True)
+
+        def _on_err(e):
+            self._gen_btn.setEnabled(True)
+            self._people_status.setText(f"✗ {e}")
+            self._people_browser.setHtml(
+                f"<p style='color:#f78166;padding:20px;'>Error: {e}</p>"
+            )
+
+        worker = _Worker(_do)
+        worker.result.connect(_on_done)
+        worker.error.connect(_on_err)
+        worker.start()
+        self._people_report_worker = worker
+
+    def _build_people_report(self, issues: list, assignees: list, scope_label: str):
+        sp    = self._sp_field
+        today = date.today().strftime("%Y-%m-%d")
+
+        # ── Group issues by assignee username ─────────────────────────────────
+        by_assignee: dict[str, dict] = {}
+        for a in assignees:
+            by_assignee[a] = {
+                "display": a, "total": 0, "done": 0,
+                "pts": 0, "done_pts": 0,
+                "by_status": {},
+                "cycle_times": [],
+                "issues": [],
+            }
+
+        for iss in issues:
+            f     = iss.get("fields", {})
+            aobj  = f.get("assignee") or {}
+            aname = aobj.get("name") or aobj.get("accountId") or ""
+            if aname not in by_assignee:
+                continue
+            rec = by_assignee[aname]
+            rec["display"] = aobj.get("displayName") or aname
+
+            status = (f.get("status") or {}).get("name", "—")
+            pts_raw = f.get(sp) or f.get("customfield_10016")
+            try:
+                pts = int(float(pts_raw)) if pts_raw is not None else 0
+            except (TypeError, ValueError):
+                pts = 0
+
+            rec["total"] += 1
+            rec["pts"]   += pts
+            rec["by_status"][status] = rec["by_status"].get(status, 0) + 1
+
+            if status == "Done":
+                rec["done"]      += 1
+                rec["done_pts"]  += pts
+                created     = f.get("created", "")[:10]
+                resolved    = f.get("resolutiondate", "")[:10]
+                if created and resolved:
+                    try:
+                        ct = (date.fromisoformat(resolved) - date.fromisoformat(created)).days
+                        rec["cycle_times"].append(max(0, ct))
+                    except ValueError:
+                        pass
+
+            rec["issues"].append(iss)
+
+        # ── Shared CSS ────────────────────────────────────────────────────────
+        STATUS_CSS = {
+            "To Do":       "#6e7681", "In Progress": "#388bfd",
+            "Done":        "#3fb950", "In Review":   "#39d5f5",
+            "Blocked":     "#f78166",
+        }
+
+        def badge(name):
+            col = STATUS_CSS.get(name, "#8b949e")
+            return (f'<span style="display:inline-block;padding:2px 8px;border-radius:10px;'
+                    f'font-size:11px;font-weight:bold;background:{col}22;color:{col};'
+                    f'border:1px solid {col}55;">{name}</span>')
+
+        def bar(pct, colour="#388bfd", width=140):
+            filled = max(0, min(pct, 100))
+            return (f'<div style="display:inline-block;width:{width}px;height:8px;'
+                    f'background:#e0e0e0;border-radius:4px;vertical-align:middle;">'
+                    f'<div style="width:{filled}%;height:8px;background:{colour};'
+                    f'border-radius:4px;"></div></div>&nbsp;{pct}%')
+
+        td = "padding:8px 12px;border-bottom:1px solid #e0e0e0;vertical-align:middle;"
+        th = ("padding:8px 12px;background:#f6f8fa;font-size:11px;letter-spacing:.5px;"
+              "text-transform:uppercase;border-bottom:2px solid #d0d7de;text-align:left;")
+
+        # ── Summary table ─────────────────────────────────────────────────────
+        summary_rows = []
+        for aname in assignees:
+            rec  = by_assignee.get(aname, {})
+            if not rec:
+                continue
+            done_pct = round(rec["done"] / rec["total"] * 100) if rec["total"] else 0
+            pts_pct  = round(rec["done_pts"] / rec["pts"] * 100) if rec["pts"] else 0
+            avg_ct   = (round(sum(rec["cycle_times"]) / len(rec["cycle_times"]), 1)
+                        if rec["cycle_times"] else "—")
+            status_breakdown = " &nbsp; ".join(
+                f'{badge(s)} ×{c}' for s, c in sorted(rec["by_status"].items())
+            )
+            summary_rows.append(
+                f"<tr>"
+                f"<td><strong>{rec.get('display', aname)}</strong></td>"
+                f"<td style='text-align:center;'>{rec['total']}</td>"
+                f"<td style='text-align:center;'>{rec['done']}</td>"
+                f"<td>{bar(done_pct, '#3fb950')}</td>"
+                f"<td style='text-align:center;'>{rec['pts']}</td>"
+                f"<td style='text-align:center;'>{rec['done_pts']}</td>"
+                f"<td>{bar(pts_pct, '#388bfd')}</td>"
+                f"<td style='text-align:center;'>{avg_ct}</td>"
+                f"<td>{status_breakdown}</td>"
+                f"</tr>"
+            )
+
+        # ── Per-person detail sections ─────────────────────────────────────────
+        detail_sections = []
+        for aname in assignees:
+            rec = by_assignee.get(aname, {})
+            if not rec or not rec["issues"]:
+                continue
+            rows = []
+            for iss in sorted(rec["issues"], key=lambda i: i.get("key", "")):
+                f      = iss.get("fields", {})
+                key    = iss.get("key", "")
+                summ   = f.get("summary", "")
+                status = (f.get("status") or {}).get("name", "—")
+                pri    = (f.get("priority") or {}).get("name", "—")
+                itype  = (f.get("issuetype") or {}).get("name", "—")
+                due    = (f.get("duedate") or "")[:10] or "—"
+                pts_raw = f.get(sp) or f.get("customfield_10016")
+                try:
+                    pts_str = str(int(float(pts_raw))) if pts_raw is not None else "—"
+                except (TypeError, ValueError):
+                    pts_str = "—"
+                resolved = (f.get("resolutiondate") or "")[:10] or "—"
+                key_cell = (f'<a href="{self._base_url}/browse/{key}" style="color:#388bfd;">{key}</a>'
+                            if self._base_url else key)
+                due_style = ""
+                if due != "—":
+                    try:
+                        days = (date.fromisoformat(due) - date.today()).days
+                        if days < 0:
+                            due_style = "color:#f78166;font-weight:bold;"
+                        elif days <= 3:
+                            due_style = "color:#e3b341;"
+                    except ValueError:
+                        pass
+                rows.append(
+                    f"<tr>"
+                    f"<td>{key_cell}</td><td>{summ}</td>"
+                    f"<td>{badge(status)}</td>"
+                    f"<td style='text-align:center;'>{pts_str}</td>"
+                    f"<td style='text-align:center;{due_style}'>{due}</td>"
+                    f"<td>{resolved}</td><td>{itype}</td><td>{pri}</td>"
+                    f"</tr>"
+                )
+            done_pct = round(rec["done"] / rec["total"] * 100) if rec["total"] else 0
+            detail_sections.append(f"""
+<h2 style="margin-top:36px;border-bottom:2px solid #d0d7de;padding-bottom:6px;">
+  {rec.get('display', aname)}
+  <span style="font-size:13px;font-weight:400;color:#57606a;margin-left:12px;">
+    {rec['total']} stories &nbsp;·&nbsp; {rec['done']} done &nbsp;·&nbsp;
+    {rec['pts']} pts total &nbsp;·&nbsp; {rec['done_pts']} pts done &nbsp;·&nbsp;
+    {done_pct}% complete
+  </span>
+</h2>
+<table>
+  <tr>
+    <th>Key</th><th>Summary</th><th>Status</th><th>Pts</th>
+    <th>Due</th><th>Resolved</th><th>Type</th><th>Priority</th>
+  </tr>
+  {"".join(rows)}
+</table>""")
+
+        self._people_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>People Report — {scope_label}</title>
+<style>
+  body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+          color:#1f2328;background:#ffffff;margin:0;padding:32px; }}
+  h1   {{ font-size:22px;font-weight:700;margin:0 0 4px; }}
+  h2   {{ font-size:16px;font-weight:700; }}
+  .meta {{ font-size:12px;color:#57606a;margin-bottom:28px; }}
+  table {{ border-collapse:collapse;width:100%;font-size:13px;margin-bottom:24px; }}
+  th    {{ {th} }}
+  td    {{ {td} }}
+  tr:last-child td {{ border-bottom:none; }}
+  tr:hover td {{ background:#f6f8fa; }}
+</style>
+</head>
+<body>
+<h1>People Report</h1>
+<div class="meta">
+  Scope: {scope_label} &nbsp;·&nbsp;
+  People: {", ".join(by_assignee[a].get("display", a) for a in assignees if a in by_assignee)} &nbsp;·&nbsp;
+  Generated {today}
+</div>
+
+<h2 style="margin-bottom:10px;">Summary</h2>
+<table>
+  <tr>
+    <th>Person</th><th>Stories</th><th>Done</th><th>Story Progress</th>
+    <th>Total Pts</th><th>Done Pts</th><th>Points Progress</th>
+    <th>Avg Cycle (days)</th><th>By Status</th>
+  </tr>
+  {"".join(summary_rows)}
+</table>
+
+{"".join(detail_sections)}
+</body>
+</html>"""
+
+        self._people_browser.setHtml(self._people_html)
+
+    def _save_people_html(self):
+        from PyQt6.QtWidgets import QFileDialog
+        suggested = f"people-report-{date.today()}.html"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save People Report", suggested,
+            "HTML Files (*.html);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._people_html)
             QMessageBox.information(self, "Saved", f"Report saved to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Save Failed", str(e))
@@ -2505,7 +3182,7 @@ class MainWindow(QMainWindow):
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
             self.edit_panel._base_url = self._client.base_url
-            mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
+            mode_label = self._instance_label(mode)
             self.mode_indicator.setText(f"◈  {mode_label}")
             self.refresh_btn.setEnabled(True)
             self.switch_instance_btn.setEnabled(True)
@@ -3064,12 +3741,14 @@ class MainWindow(QMainWindow):
         qs.setValue("mode",                       s.get("mode", ""))
         qs.setValue("secondary_url",               s.get("secondary_url", ""))
         qs.setValue("secondary_token_expiry",      s.get("secondary_token_expiry", ""))
+        qs.setValue("secondary_display_name",      s.get("secondary_display_name", ""))
         qs.setValue("secondary_default_project",   s.get("secondary_default_project", ""))
         qs.setValue("secondary_default_board",     s.get("secondary_default_board", ""))
         qs.setValue("secondary_filter_projects",   s.get("secondary_filter_projects", ""))
         qs.setValue("secondary_filter_boards",     s.get("secondary_filter_boards", ""))
         qs.setValue("primary_url",                   s.get("primary_url", ""))
         qs.setValue("primary_token_expiry",          s.get("primary_token_expiry", ""))
+        qs.setValue("primary_display_name",          s.get("primary_display_name", ""))
         qs.setValue("primary_default_project",       s.get("primary_default_project", ""))
         qs.setValue("primary_default_board",         s.get("primary_default_board", ""))
         qs.setValue("primary_filter_projects",       s.get("primary_filter_projects", ""))
@@ -3089,6 +3768,7 @@ class MainWindow(QMainWindow):
             "secondary_url":               qs.value("secondary_url", ""),
             "secondary_token":             self._load_token("secondary", qs.value("secondary_token", "")),
             "secondary_token_expiry":      qs.value("secondary_token_expiry", ""),
+            "secondary_display_name":      qs.value("secondary_display_name", ""),
             "secondary_default_project":   qs.value("secondary_default_project", ""),
             "secondary_default_board":     qs.value("secondary_default_board", ""),
             "secondary_filter_projects":   qs.value("secondary_filter_projects", ""),
@@ -3096,6 +3776,7 @@ class MainWindow(QMainWindow):
             "primary_url":                   qs.value("primary_url", ""),
             "primary_token":                 self._load_token("primary", qs.value("primary_token", "")),
             "primary_token_expiry":          qs.value("primary_token_expiry", ""),
+            "primary_display_name":          qs.value("primary_display_name", ""),
             "primary_default_project":       qs.value("primary_default_project", ""),
             "primary_default_board":         qs.value("primary_default_board", ""),
             "primary_filter_projects":       qs.value("primary_filter_projects", ""),
@@ -3148,7 +3829,7 @@ class MainWindow(QMainWindow):
                 self._settings["token"],
                 mode
             )
-            mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
+            mode_label = self._instance_label(mode)
             self.edit_panel._sp_field = self._client.story_point_field_id
             self.edit_panel._fl_field = self._client.feature_link_field_id
             self.edit_panel._base_url = self._client.base_url
@@ -3187,7 +3868,7 @@ class MainWindow(QMainWindow):
         self.edit_panel._base_url = self._client.base_url
         self._sp_field = self._client.story_point_field_id
 
-        mode_label = "SECONDARY" if new_mode == JiraClient.MODE_SECONDARY else "PRIMARY"
+        mode_label = self._instance_label(new_mode)
         self.mode_indicator.setText(f"◈  {mode_label}")
         self._save_settings()
         self._check_token_expiry()
@@ -3196,6 +3877,13 @@ class MainWindow(QMainWindow):
         self._load_projects()
 
     # ── Loading helpers ───────────────────────────────────────────────────────
+    def _instance_label(self, mode: str) -> str:
+        """Return the user-set display name for a mode, falling back to PRIMARY/SECONDARY."""
+        key = "primary_display_name" if mode == JiraClient.MODE_PRIMARY else "secondary_display_name"
+        return self._settings.get(key, "").strip() or (
+            "PRIMARY" if mode == JiraClient.MODE_PRIMARY else "SECONDARY"
+        )
+
     def _busy(self, on: bool):
         self.progress.setVisible(on)
 
@@ -3420,7 +4108,7 @@ class MainWindow(QMainWindow):
         if bid_save and sid_save:
             QSettings("SprintMate", "SprintMate").setValue(f"last_sprint_{bid_save}", sid_save)
         mode = self._settings.get("mode", JiraClient.MODE_SECONDARY)
-        mode_label = "SECONDARY" if mode == JiraClient.MODE_SECONDARY else "PRIMARY"
+        mode_label = self._instance_label(mode)
         sprint_label = self.sprint_combo.currentText()
         self._busy(True)
         self._status(f"Loading stories from {mode_label} — {sprint_label}…")
@@ -3649,6 +4337,14 @@ class MainWindow(QMainWindow):
             pass
         self.edit_panel.attach_btn.clicked.connect(
             lambda: self._attach_file_to_issue(key)
+        )
+        # Re-wire clone button
+        try:
+            self.edit_panel.clone_btn.clicked.disconnect()
+        except Exception:
+            pass
+        self.edit_panel.clone_btn.clicked.connect(
+            lambda: self._clone_issue(issue)
         )
         # Re-wire edit/delete comment buttons to current issue
         try:
@@ -4515,6 +5211,7 @@ class MainWindow(QMainWindow):
         if not self._issues:
             return
         sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
+        board_id = self.board_combo.currentData() or 0
         dlg = SprintReportDialog(
             issues=self._issues,
             sprint_label=sprint_label,
@@ -4522,6 +5219,8 @@ class MainWindow(QMainWindow):
             fl_field=self.edit_panel._fl_field,
             base_url=self.edit_panel._base_url,
             adf_to_text_fn=self.edit_panel._adf_to_text,
+            client=self._client,
+            board_id=board_id,
             parent=self,
         )
         dlg.exec()
@@ -4695,6 +5394,7 @@ class MainWindow(QMainWindow):
                 self.edit_panel.status_badge.setText("")
                 self.edit_panel.save_btn.setEnabled(False)
                 self.edit_panel.attach_btn.setEnabled(False)
+                self.edit_panel.clone_btn.setEnabled(False)
                 self.edit_panel.open_jira_btn.setEnabled(False)
                 self.edit_panel.copy_key_btn.setEnabled(False)
 
@@ -4872,6 +5572,218 @@ class MainWindow(QMainWindow):
                 self._busy(False),
                 self._status("✗ Failed to delete comment."),
                 QMessageBox.critical(self, "Delete Failed", str(e)),
+            ),
+        )
+
+    # ── Clone Issue ───────────────────────────────────────────────────────────
+    def _clone_issue(self, issue: dict):
+        f          = issue.get("fields", {})
+        src_key    = issue.get("key", "")
+        summary    = f.get("summary", "")
+        desc_raw   = f.get("description") or {}
+        desc_text  = self.edit_panel._adf_to_text(desc_raw) if isinstance(desc_raw, dict) else str(desc_raw or "")
+        aobj       = f.get("assignee") or {}
+        assignee   = aobj.get("name") or aobj.get("accountId") or ""
+        assignee_display = aobj.get("displayName") or assignee
+        itype      = (f.get("issuetype") or {}).get("name", "Story")
+
+        # Determine available instances
+        s = self._settings
+        current_mode  = s.get("mode", JiraClient.MODE_SECONDARY)
+        other_mode    = JiraClient.MODE_PRIMARY if current_mode == JiraClient.MODE_SECONDARY else JiraClient.MODE_SECONDARY
+        other_url     = s.get(f"{'primary' if other_mode == JiraClient.MODE_PRIMARY else 'secondary'}_url", "")
+        other_token   = s.get(f"{'primary' if other_mode == JiraClient.MODE_PRIMARY else 'secondary'}_token", "")
+        other_label   = self._instance_label(other_mode)
+        current_label = self._instance_label(current_mode)
+        has_other     = bool(other_url and other_token)
+
+        # ── Dialog ────────────────────────────────────────────────────────────
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Clone {src_key}")
+        dlg.setMinimumSize(560, 520)
+        dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        title_lbl = QLabel(f"⎘  CLONE  {src_key}")
+        title_lbl.setObjectName("heading")
+        layout.addWidget(title_lbl)
+
+        # ── Instance selector ─────────────────────────────────────────────────
+        inst_grp = QGroupBox("TARGET INSTANCE")
+        inst_layout = QHBoxLayout(inst_grp)
+        inst_combo = QComboBox()
+        inst_combo.addItem(f"Current ({current_label})", userData="current")
+        if has_other:
+            inst_combo.addItem(other_label, userData="other")
+        inst_layout.addWidget(inst_combo)
+        layout.addWidget(inst_grp)
+
+        # ── Project selector ──────────────────────────────────────────────────
+        proj_grp = QGroupBox("TARGET PROJECT")
+        proj_layout = QHBoxLayout(proj_grp)
+        proj_combo = QComboBox()
+        proj_combo.setMinimumWidth(300)
+        proj_combo.addItem("Loading projects…")
+        proj_combo.setEnabled(False)
+        proj_layout.addWidget(proj_combo)
+        layout.addWidget(proj_grp)
+
+        # ── Fields ────────────────────────────────────────────────────────────
+        fields_grp = QGroupBox("FIELDS TO CLONE")
+        fields_layout = QVBoxLayout(fields_grp)
+        fields_layout.setSpacing(8)
+
+        sum_lbl = QLabel("Summary")
+        sum_lbl.setObjectName("dim")
+        fields_layout.addWidget(sum_lbl)
+        sum_edit = QLineEdit(f"[Clone] {summary}")
+        fields_layout.addWidget(sum_edit)
+
+        desc_lbl = QLabel("Description")
+        desc_lbl.setObjectName("dim")
+        fields_layout.addWidget(desc_lbl)
+        desc_edit = QTextEdit()
+        desc_edit.setPlainText(desc_text)
+        desc_edit.setMaximumHeight(100)
+        fields_layout.addWidget(desc_edit)
+
+        assignee_lbl = QLabel("Assignee (username)")
+        assignee_lbl.setObjectName("dim")
+        fields_layout.addWidget(assignee_lbl)
+        assignee_edit = QLineEdit(assignee)
+        assignee_edit.setPlaceholderText(f"e.g. {assignee_display or 'jsmith'}")
+        fields_layout.addWidget(assignee_edit)
+
+        layout.addWidget(fields_grp)
+
+        # ── Status label ──────────────────────────────────────────────────────
+        status_lbl = QLabel("")
+        status_lbl.setObjectName("dim")
+        layout.addWidget(status_lbl)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        clone_ok = btns.button(QDialogButtonBox.StandardButton.Ok)
+        clone_ok.setText("⎘  Clone")
+        clone_ok.setObjectName("save_btn")
+        clone_ok.setEnabled(False)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        # ── Load projects for the selected instance ───────────────────────────
+        _project_cache: dict[str, list] = {}
+
+        def _load_projects_for_instance():
+            inst = inst_combo.currentData()
+            if inst in _project_cache:
+                _populate_projects(_project_cache[inst])
+                return
+            proj_combo.clear()
+            proj_combo.addItem("Loading…")
+            proj_combo.setEnabled(False)
+            clone_ok.setEnabled(False)
+            status_lbl.setText("Fetching projects…")
+            if inst == "current":
+                client = self._client
+            else:
+                client = JiraClient(other_url, other_token, other_mode)
+
+            worker = _Worker(client.get_projects)
+            worker.result.connect(lambda r: _on_projects(r, inst))
+            worker.error.connect(lambda e: status_lbl.setText(f"⚠ {e}"))
+            worker.start()
+            dlg._workers = getattr(dlg, "_workers", [])
+            dlg._workers.append(worker)
+
+        def _on_projects(projects, inst_key):
+            _project_cache[inst_key] = projects
+            _populate_projects(projects)
+
+        def _populate_projects(projects):
+            proj_combo.clear()
+            if not projects:
+                proj_combo.addItem("No projects found")
+                status_lbl.setText("⚠ No projects available.")
+                return
+            for p in sorted(projects, key=lambda x: x.get("name", "")):
+                proj_combo.addItem(f"{p.get('key','')} — {p.get('name','')}", userData=p.get("key",""))
+            proj_combo.setEnabled(True)
+            clone_ok.setEnabled(True)
+            status_lbl.setText("")
+
+        inst_combo.currentIndexChanged.connect(lambda _: _load_projects_for_instance())
+        _load_projects_for_instance()
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        target_project = proj_combo.currentData()
+        if not target_project:
+            return
+
+        new_summary  = sum_edit.text().strip() or f"[Clone] {summary}"
+        new_desc     = desc_edit.toPlainText().strip()
+        new_assignee = assignee_edit.text().strip()
+        inst         = inst_combo.currentData()
+        target_label = proj_combo.currentText()
+
+        # Build the client for the target
+        if inst == "current":
+            target_client = self._client
+        else:
+            target_client = JiraClient(other_url, other_token, other_mode)
+
+        self._busy(True)
+        self._status(f"Cloning {src_key} → {target_project}…")
+
+        def _do_clone():
+            return target_client.clone_issue(
+                project_key=target_project,
+                summary=new_summary,
+                description=new_desc,
+                assignee_name=new_assignee,
+                issue_type=itype,
+            )
+
+        def _on_done(result):
+            self._busy(False)
+            new_key = result.get("key", "—")
+            new_url = f"{target_client.base_url}/browse/{new_key}"
+
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Clone Successful")
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(
+                f"✓ <b>{src_key}</b> cloned successfully.\n\n"
+                f"New issue: <b>{new_key}</b>\n"
+                f"Project: {target_label}\n"
+                f"Instance: {other_label if inst == 'other' else current_label}"
+            )
+            copy_btn = msg.addButton("Copy Key", QMessageBox.ButtonRole.ActionRole)
+            open_btn = msg.addButton("Open in Jira", QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QMessageBox.StandardButton.Ok)
+            msg.exec()
+
+            if msg.clickedButton() == copy_btn:
+                QApplication.clipboard().setText(new_key)
+                self._status(f"✓ Cloned as {new_key} — key copied to clipboard.")
+            elif msg.clickedButton() == open_btn:
+                webbrowser.open(new_url)
+                self._status(f"✓ Cloned as {new_key} — opened in browser.")
+            else:
+                self._status(f"✓ {src_key} cloned as {new_key}.")
+
+        self._spawn(
+            _do_clone,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Clone failed."),
+                QMessageBox.critical(self, "Clone Failed", str(e)),
             ),
         )
 
