@@ -1,4 +1,22 @@
 # SprintMate Changelog
+## [2.16.0] — 2026-06-22
+
+### Features
+
+* **Sprint Report tab now supports filtering by sprint or date range.** The Sprint Report tab has been refactored to match the People Report tab pattern. A SCOPE control group replaces the static title — choose a sprint from the dropdown (pre-selected to the currently loaded sprint) or switch to Date Range and enter From/To dates in `YYYY-MM-DD` format. Clicking **▶ Generate Sprint Report** fetches the relevant issues and renders the report. The **⬇ Save as HTML** button is disabled until the first successful generate. Sprint scope calls `get_sprint_issues(board_id, sprint_id)`; date range scope builds a JQL query with `updated >=` / `updated <=` bounds and fetches via the search API with pagination.
+
+* **Sprint and People Report tabs now share a single sprint fetch.** `_load_sprints_for_people_tab` has been replaced by `_load_sprints_for_tabs`, which fetches all sprints once on dialog open and populates both the Sprint Report combo and the People Report combo in a single background call, reducing redundant API requests.
+
+* **`_build_report` now accepts issues and a scope label as parameters.** The method signature changed from `_build_report(self)` to `_build_report(self, issues, scope_label)`, allowing it to render any set of issues with any title rather than always using `self._issues` and `self._sprint_label`. The HTML `<title>` and meta line reflect the scope label passed in.
+
+### Bug Fixes
+
+* **Fixed `TypeError: setStyleSheet argument has unexpected type 'ellipsis'`.** The `self._browser.setStyleSheet(...)` call had a literal `...` ellipsis placeholder instead of the stylesheet string, causing a crash on dialog open. Replaced with the correct f-string stylesheet.
+
+* **Fixed `TypeError: _build_report() takes 1 positional argument but 3 were given`.** The local `_build_report` signature had not been updated to accept `issues` and `scope_label`, causing a crash when `_generate_sprint_report` called `self._build_report(issues, scope_label)`.
+* **Fixed Pylance false positives for `sprint_btn_row`, `scope_label`, and `all_issues`.** `scope_label` and `all_issues` were only defined inside `if`/`else` branches, making them unresolvable to Pylance at the point `_on_done` referenced them. Fixed by hoisting all variable assignments to the top of `_generate_sprint_report` and collapsing the two branch-scoped `_do` closures into a single `_do` that branches internally. Also replaced `__import__` and inline `import` statements with the already-imported top-level `urllib.parse`, `urllib.request`, and `json` modules.
+
+
 ## [2.15.1] — 2026-06-22
 ### Features
 * **Custom display names for instances.** Added a "Display Name" field to the settings dialog for each instance. When set, the name replaces "Primary" / "Secondary" everywhere it appears in the app — the top bar mode indicator, the Switch Instance status message, the sprint load status, and the clone dialog instance selector. Falls back to "PRIMARY" / "SECONDARY" if left blank. Values are persisted via `QSettings` as `primary_display_name` and `secondary_display_name`. A new `_instance_label(mode)` helper on `MainWindow` centralises the fallback logic so all call sites stay consistent.
