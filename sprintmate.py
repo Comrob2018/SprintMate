@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.17.0"
+APP_VERSION  = "2.18.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -485,6 +485,76 @@ class JiraClient:
                 except (TypeError, ValueError):
                     continue
         return None
+
+    def get_sprint_detail(self, sprint_id: int) -> dict:
+        """Return full sprint metadata including startDate and endDate."""
+        url = f"{self.base_url}/rest/agile/1.0/sprint/{sprint_id}"
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode())
+        except Exception:
+            return {}
+
+    def rank_issue(self, issue_key: str, rank_before_key: str = "", rank_after_key: str = "") -> None:
+        """Re-rank an issue relative to another. Uses the Agile API rank endpoint."""
+        body: dict = {"issues": [issue_key]}
+        if rank_before_key:
+            body["rankBeforeIssue"] = rank_before_key
+        elif rank_after_key:
+            body["rankAfterIssue"] = rank_after_key
+        else:
+            return
+        url = f"{self.base_url}/rest/agile/1.0/issue/rank"
+        data = json.dumps(body).encode()
+        req  = urllib.request.Request(url, data=data, headers=self.headers, method="PUT")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} ranking issue: {e.read().decode(errors='replace')}")
+
+    def get_velocity_history(self, board_id: int, num_sprints: int = 6) -> list:
+        """Fetch closed sprints and compute points done per sprint for velocity chart."""
+        sp     = self.story_point_field_id
+        url    = (f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint"
+                  f"?state=closed&maxResults={num_sprints}&startAt=0")
+        req    = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                sprints = json.loads(resp.read().decode()).get("values", [])
+        except Exception:
+            return []
+        # Most recent first from Jira — reverse to chronological for display
+        sprints = list(reversed(sprints[-num_sprints:]))
+        result  = []
+        for sprint in sprints:
+            sid   = sprint.get("id")
+            name  = sprint.get("name", "")
+            issues = self.get_sprint_issues(board_id, sid)
+            total_pts = done_pts = 0
+            for iss in issues:
+                f       = iss.get("fields", {})
+                pts_raw = next(
+                    (f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None),
+                    None,
+                )
+                try:
+                    pts = int(float(pts_raw)) if pts_raw is not None else 0
+                except (TypeError, ValueError):
+                    pts = 0
+                total_pts += pts
+                if (f.get("status") or {}).get("name", "") == "Done":
+                    done_pts += pts
+            result.append({
+                "name":      name,
+                "total_pts": total_pts,
+                "done_pts":  done_pts,
+                "n_total":   len(issues),
+                "n_done":    sum(1 for i in issues
+                                 if (i.get("fields", {}).get("status") or {}).get("name") == "Done"),
+            })
+        return result
 
     def get_boards(self, project_key: str):
         url = f"{self.base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}"
@@ -2319,22 +2389,24 @@ class SprintReportDialog(QDialog):
 
     def __init__(self, issues: list, sprint_label: str, sp_field: str,
                  fl_field: str, base_url: str, adf_to_text_fn,
-                 client=None, board_id: int = 0, parent=None):
+                 client=None, board_id: int = 0, sprint_detail: dict = None,
+                 parent=None):
         super().__init__(parent)
         self.setWindowTitle("Sprint Report")
         self.setMinimumSize(960, 720)
         self.setStyleSheet(parent.styleSheet() if parent else "")
 
-        self._issues       = issues
-        self._sprint_label = sprint_label
-        self._sp_field     = sp_field
-        self._fl_field     = fl_field
-        self._base_url     = base_url
-        self._adf_to_text  = adf_to_text_fn
-        self._client       = client
-        self._board_id     = board_id
-        self._html         = ""
-        self._people_html  = ""
+        self._issues        = issues
+        self._sprint_label  = sprint_label
+        self._sp_field      = sp_field
+        self._fl_field      = fl_field
+        self._base_url      = base_url
+        self._adf_to_text   = adf_to_text_fn
+        self._client        = client
+        self._board_id      = board_id
+        self._sprint_detail = sprint_detail or {}
+        self._html          = ""
+        self._people_html   = ""
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -2857,7 +2929,7 @@ class SprintReportDialog(QDialog):
 
     def _build_burndown_svg(self, total_pts: int, done_pts: int,
                             n_total: int, n_done: int) -> str:
-        """Generate a simple SVG burndown chart: ideal line vs current remaining."""
+        """Generate a burndown SVG using real sprint start/end dates when available."""
         W, H      = 700, 220
         PAD_L     = 56
         PAD_R     = 24
@@ -2866,12 +2938,22 @@ class SprintReportDialog(QDialog):
         chart_w   = W - PAD_L - PAD_R
         chart_h   = H - PAD_T - PAD_B
 
-        # We model a 14-day sprint; x-axis = days, y-axis = remaining points
-        sprint_days = 14
-        remaining   = max(0, total_pts - done_pts)
-        pct_elapsed = min(1.0, done_pts / total_pts) if total_pts else 0.0
-        # Estimate day based on work done so far
-        current_day = round(pct_elapsed * sprint_days)
+        # Derive sprint duration from real dates if available
+        today       = date.today()
+        start_str   = (self._sprint_detail.get("startDate") or "")[:10]
+        end_str     = (self._sprint_detail.get("endDate")   or "")[:10]
+        try:
+            sprint_start = date.fromisoformat(start_str)
+            sprint_end   = date.fromisoformat(end_str)
+            sprint_days  = max(1, (sprint_end - sprint_start).days)
+            current_day  = max(0, min(sprint_days, (today - sprint_start).days))
+        except (ValueError, TypeError):
+            # Fallback: estimate from points done
+            sprint_days  = 14
+            pct_elapsed  = min(1.0, done_pts / total_pts) if total_pts else 0.0
+            current_day  = round(pct_elapsed * sprint_days)
+
+        remaining = max(0, total_pts - done_pts)
 
         def px(day: int) -> int:
             return PAD_L + round(day / sprint_days * chart_w)
@@ -2885,88 +2967,78 @@ class SprintReportDialog(QDialog):
         ideal_x1, ideal_y1 = px(0), py(total_pts)
         ideal_x2, ideal_y2 = px(sprint_days), py(0)
 
-        # Actual: starts at (0, total), stays flat until today, drops to remaining
-        actual_pts = [
-            (0,           total_pts),
-            (current_day, remaining),
-        ]
-
-        actual_d = " ".join(
+        # Actual: from (0, total) to (current_day, remaining)
+        actual_pts = [(0, total_pts), (current_day, remaining)]
+        actual_d   = " ".join(
             f"{'M' if i == 0 else 'L'}{px(d)},{py(p)}"
             for i, (d, p) in enumerate(actual_pts)
         )
 
-        # X-axis tick labels (every 2 days)
+        # X-axis tick labels (every 2 days, or every day for short sprints)
+        step = 1 if sprint_days <= 7 else 2
         x_ticks = "".join(
             f'<text x="{px(d)}" y="{PAD_T + chart_h + 18}" '
             f'text-anchor="middle" fill="#57606a" font-size="10">{d}</text>'
-            for d in range(0, sprint_days + 1, 2)
+            for d in range(0, sprint_days + 1, step)
         )
-        # Y-axis tick labels (4 ticks)
-        y_ticks = "".join(
-            f'<text x="{PAD_L - 8}" y="{py(v) + 4}" '
-            f'text-anchor="end" fill="#57606a" font-size="10">{v}</text>'
-            f'<line x1="{PAD_L}" y1="{py(v)}" x2="{PAD_L + chart_w}" y2="{py(v)}" '
-            f'stroke="#e0e0e0" stroke-width="1"/>'
-            for v in [0, total_pts // 4, total_pts // 2, total_pts * 3 // 4, total_pts]
-            if total_pts > 0
-        )
+        # Y-axis ticks
+        y_ticks = ""
+        if total_pts > 0:
+            for v in [0, total_pts // 4, total_pts // 2, total_pts * 3 // 4, total_pts]:
+                yy = py(v)
+                y_ticks += (
+                    f'<text x="{PAD_L - 8}" y="{yy + 4}" text-anchor="end" fill="#57606a" font-size="10">{v}</text>'
+                    f'<line x1="{PAD_L}" y1="{yy}" x2="{PAD_L + chart_w}" y2="{yy}" stroke="#e0e0e0" stroke-width="1"/>'
+                )
 
-        # Shaded area under actual line
+        # Shaded area
         shade_d = (
             f"M{px(0)},{py(total_pts)} "
-            f"{actual_d[1:]} "
+            f"L{px(current_day)},{py(remaining)} "
             f"L{px(current_day)},{PAD_T + chart_h} "
             f"L{px(0)},{PAD_T + chart_h} Z"
         )
 
+        # Date footnote
+        date_note = ""
+        if start_str and end_str:
+            date_note = f" · {start_str} → {end_str}"
+
         svg = f"""<div style="margin:16px 0;">
 <svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg"
      style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <!-- Background -->
-  <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}"
-        fill="#f6f8fa" rx="4"/>
-  <!-- Grid lines and y-axis labels -->
+  <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}" fill="#f6f8fa" rx="4"/>
   {y_ticks}
-  <!-- Shaded actual area -->
   <path d="{shade_d}" fill="#388bfd" fill-opacity="0.10"/>
-  <!-- Ideal burndown line -->
   <line x1="{ideal_x1}" y1="{ideal_y1}" x2="{ideal_x2}" y2="{ideal_y2}"
         stroke="#d0d7de" stroke-width="2" stroke-dasharray="6,4"/>
-  <!-- Actual burndown line -->
   <path d="{actual_d}" fill="none" stroke="#388bfd" stroke-width="2.5"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- Remaining point marker -->
   <circle cx="{px(current_day)}" cy="{py(remaining)}" r="5"
           fill="#388bfd" stroke="#ffffff" stroke-width="2"/>
-  <!-- Axes -->
   <line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T + chart_h}"
         stroke="#d0d7de" stroke-width="1"/>
   <line x1="{PAD_L}" y1="{PAD_T + chart_h}"
         x2="{PAD_L + chart_w}" y2="{PAD_T + chart_h}"
         stroke="#d0d7de" stroke-width="1"/>
   {x_ticks}
-  <!-- Axis labels -->
   <text x="{PAD_L + chart_w // 2}" y="{H - 4}" text-anchor="middle"
         fill="#57606a" font-size="11">Sprint Day</text>
   <text x="12" y="{PAD_T + chart_h // 2}" text-anchor="middle"
         fill="#57606a" font-size="11"
         transform="rotate(-90,12,{PAD_T + chart_h // 2})">Points Remaining</text>
-  <!-- Legend -->
   <line x1="{PAD_L + chart_w - 160}" y1="{PAD_T + 12}"
         x2="{PAD_L + chart_w - 140}" y2="{PAD_T + 12}"
         stroke="#d0d7de" stroke-width="2" stroke-dasharray="6,4"/>
-  <text x="{PAD_L + chart_w - 136}" y="{PAD_T + 16}"
-        fill="#57606a" font-size="10">Ideal</text>
+  <text x="{PAD_L + chart_w - 136}" y="{PAD_T + 16}" fill="#57606a" font-size="10">Ideal</text>
   <line x1="{PAD_L + chart_w - 100}" y1="{PAD_T + 12}"
         x2="{PAD_L + chart_w - 80}" y2="{PAD_T + 12}"
         stroke="#388bfd" stroke-width="2.5"/>
-  <text x="{PAD_L + chart_w - 76}" y="{PAD_T + 16}"
-        fill="#57606a" font-size="10">Actual</text>
+  <text x="{PAD_L + chart_w - 76}" y="{PAD_T + 16}" fill="#57606a" font-size="10">Actual</text>
 </svg>
 <p style="font-size:11px;color:#57606a;margin:4px 0 0;">
   {total_pts} total pts · {done_pts} done · {remaining} remaining
-  · estimated day {current_day} of {sprint_days}
+  · day {current_day} of {sprint_days}{date_note}
 </p>
 </div>"""
         return svg
@@ -3295,6 +3367,241 @@ class SprintReportDialog(QDialog):
             QMessageBox.critical(self, "Save Failed", str(e))
 
 
+# ── Velocity History Dialog ───────────────────────────────────────────────────
+class VelocityHistoryDialog(QDialog):
+    """Shows a bar chart of points committed vs completed across recent closed sprints."""
+
+    def __init__(self, board_id: int, client, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Velocity History")
+        self.setMinimumSize(740, 460)
+        self.setStyleSheet(parent.styleSheet() if parent else "")
+        self._board_id = board_id
+        self._client   = client
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        title = QLabel("◈  VELOCITY HISTORY")
+        title.setObjectName("heading")
+        layout.addWidget(title)
+
+        ctrl = QHBoxLayout()
+        ctrl.addWidget(QLabel("Sprints to show:"))
+        self._num_combo = QComboBox()
+        for n in [3, 5, 6, 8, 10]:
+            self._num_combo.addItem(str(n), n)
+        self._num_combo.setCurrentIndex(2)   # default 6
+        ctrl.addWidget(self._num_combo)
+        self._gen_btn = QPushButton("▶  Load")
+        self._gen_btn.setObjectName("toolbar_btn")
+        self._gen_btn.clicked.connect(self._load)
+        ctrl.addWidget(self._gen_btn)
+        self._status_lbl = QLabel("")
+        self._status_lbl.setObjectName("dim")
+        ctrl.addWidget(self._status_lbl, 1)
+        layout.addLayout(ctrl)
+
+        # SVG chart area
+        self._chart_lbl = QLabel()
+        self._chart_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._chart_lbl.setMinimumHeight(300)
+        self._chart_lbl.setStyleSheet(f"background: {PANEL_BG}; border: 1px solid {BORDER}; border-radius: 8px;")
+        layout.addWidget(self._chart_lbl, 1)
+
+        # Summary table
+        self._table = QTableWidget()
+        self._table.setColumnCount(5)
+        self._table.setHorizontalHeaderLabels(["Sprint", "Total Pts", "Done Pts", "Stories", "Done"])
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for c in range(1, 5):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setShowGrid(False)
+        self._table.setMaximumHeight(180)
+        layout.addWidget(self._table)
+
+        btn_row = QHBoxLayout()
+        self._export_btn = QPushButton("⬇  Export CSV")
+        self._export_btn.setObjectName("toolbar_btn")
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self._export_csv)
+        btn_row.addWidget(self._export_btn)
+        btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self._data: list = []
+        self._load()
+
+    def _load(self):
+        self._gen_btn.setEnabled(False)
+        self._status_lbl.setText("Loading sprint history…")
+        num = self._num_combo.currentData()
+
+        from PyQt6.QtCore import QThread, pyqtSignal as _sig
+
+        class _W(QThread):
+            result = _sig(object)
+            error  = _sig(str)
+            def __init__(self, fn, *a):
+                super().__init__()
+                self._fn, self._a = fn, a
+            def run(self):
+                try:    self.result.emit(self._fn(*self._a))
+                except Exception as e: self.error.emit(str(e))
+
+        w = _W(self._client.get_velocity_history, self._board_id, num)
+        w.result.connect(self._on_data)
+        w.error.connect(lambda e: (
+            self._status_lbl.setText(f"✗ {e}"),
+            self._gen_btn.setEnabled(True),
+        ))
+        w.start()
+        self._w = w
+
+    def _on_data(self, data: list):
+        self._data = data
+        self._gen_btn.setEnabled(True)
+        self._export_btn.setEnabled(bool(data))
+        if not data:
+            self._status_lbl.setText("No closed sprints found.")
+            return
+        self._status_lbl.setText(f"✓ {len(data)} sprints loaded.")
+        self._render_chart(data)
+        self._populate_table(data)
+
+    def _render_chart(self, data: list):
+        W, H      = 680, 280
+        PAD_L     = 52
+        PAD_R     = 16
+        PAD_T     = 20
+        PAD_B     = 60
+        chart_w   = W - PAD_L - PAD_R
+        chart_h   = H - PAD_T - PAD_B
+        n         = len(data)
+        max_pts   = max((d["total_pts"] for d in data), default=1) or 1
+        bar_group = chart_w / n
+        bar_w     = max(4, int(bar_group * 0.35))
+        gap       = max(2, int(bar_group * 0.06))
+
+        def py(pts):
+            return PAD_T + chart_h - round(pts / max_pts * chart_h)
+
+        bars = ""
+        x_labels = ""
+        for i, d in enumerate(data):
+            cx   = PAD_L + int(i * bar_group + bar_group / 2)
+            # Committed bar (total)
+            bx1  = cx - bar_w - gap // 2
+            bh1  = round(d["total_pts"] / max_pts * chart_h)
+            by1  = PAD_T + chart_h - bh1
+            # Done bar
+            bx2  = cx + gap // 2
+            bh2  = round(d["done_pts"]  / max_pts * chart_h)
+            by2  = PAD_T + chart_h - bh2
+            bars += (
+                f'<rect x="{bx1}" y="{by1}" width="{bar_w}" height="{bh1}" '
+                f'fill="{ACCENT_BLUE}" rx="3" opacity="0.7"/>'
+                f'<rect x="{bx2}" y="{by2}" width="{bar_w}" height="{bh2}" '
+                f'fill="{ACCENT_GREEN}" rx="3"/>'
+            )
+            if d["total_pts"]:
+                bars += (
+                    f'<text x="{bx1 + bar_w//2}" y="{by1 - 4}" text-anchor="middle" '
+                    f'fill="{TEXT_SEC}" font-size="9">{d["total_pts"]}</text>'
+                    f'<text x="{bx2 + bar_w//2}" y="{by2 - 4}" text-anchor="middle" '
+                    f'fill="{ACCENT_GREEN}" font-size="9">{d["done_pts"]}</text>'
+                )
+            short = d["name"][:14] + "…" if len(d["name"]) > 14 else d["name"]
+            x_labels += (
+                f'<text x="{cx}" y="{PAD_T + chart_h + 16}" text-anchor="middle" '
+                f'fill="{TEXT_SEC}" font-size="9">{short}</text>'
+            )
+
+        # Y-axis ticks
+        y_ticks = ""
+        for v in range(0, int(max_pts) + 1, max(1, int(max_pts) // 5)):
+            yy = py(v)
+            y_ticks += (
+                f'<line x1="{PAD_L}" y1="{yy}" x2="{PAD_L + chart_w}" y2="{yy}" '
+                f'stroke="{BORDER}" stroke-width="1"/>'
+                f'<text x="{PAD_L - 6}" y="{yy + 4}" text-anchor="end" '
+                f'fill="{TEXT_SEC}" font-size="9">{v}</text>'
+            )
+
+        legend = (
+            f'<rect x="{PAD_L}" y="{H - 18}" width="12" height="10" fill="{ACCENT_BLUE}" rx="2" opacity="0.7"/>'
+            f'<text x="{PAD_L + 16}" y="{H - 9}" fill="{TEXT_SEC}" font-size="10">Committed</text>'
+            f'<rect x="{PAD_L + 90}" y="{H - 18}" width="12" height="10" fill="{ACCENT_GREEN}" rx="2"/>'
+            f'<text x="{PAD_L + 106}" y="{H - 9}" fill="{TEXT_SEC}" font-size="10">Completed</text>'
+        )
+
+        svg = (
+            f'<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg" '
+            f'style="background:{DARK_BG};">'
+            f'{y_ticks}{bars}{x_labels}{legend}'
+            f'<line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T + chart_h}" '
+            f'stroke="{BORDER}" stroke-width="1"/>'
+            f'<line x1="{PAD_L}" y1="{PAD_T + chart_h}" x2="{PAD_L + chart_w}" y2="{PAD_T + chart_h}" '
+            f'stroke="{BORDER}" stroke-width="1"/>'
+            f'</svg>'
+        )
+        pix = QPixmap(W, H)
+        pix.fill(QColor(DARK_BG))
+        try:
+            from PyQt6.QtSvg import QSvgRenderer
+            renderer = QSvgRenderer(QByteArray(svg.encode()))
+            painter  = QPainter(pix)
+            renderer.render(painter)
+            painter.end()
+        except ImportError:
+            # PyQt6.QtSvg not available — fall back to text label
+            self._chart_lbl.setText(
+                "Install PyQt6-Qt6-Svg for chart rendering.\n"
+                "pip install PyQt6-Qt6-Svg"
+            )
+            return
+        self._chart_lbl.setPixmap(pix)
+
+    def _populate_table(self, data: list):
+        self._table.setRowCount(0)
+        for d in data:
+            row = self._table.rowCount()
+            self._table.insertRow(row)
+            self._table.setItem(row, 0, QTableWidgetItem(d["name"]))
+            for c, val in enumerate([d["total_pts"], d["done_pts"], d["n_total"], d["n_done"]], 1):
+                it = QTableWidgetItem(str(val))
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if c == 2:
+                    it.setForeground(QColor(ACCENT_GREEN))
+                self._table.setItem(row, c, it)
+            self._table.setRowHeight(row, 32)
+
+    def _export_csv(self):
+        if not self._data:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Velocity CSV", "velocity-history.csv", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["sprint", "total_pts", "done_pts", "n_total", "n_done"])
+                for d in self._data:
+                    w.writerow([d["name"], d["total_pts"], d["done_pts"], d["n_total"], d["n_done"]])
+            QMessageBox.information(self, "Exported", f"Velocity data saved to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
+
+
 # ── Kanban Board ──────────────────────────────────────────────────────────────
 KANBAN_STATUSES = ["To Do", "In Progress", "In Review", "Done", "Blocked"]
 KANBAN_MIME     = "application/x-sprintmate-kanban-key"
@@ -3501,11 +3808,13 @@ class KanbanBoardWidget(QWidget):
     """Full Kanban board: one column per status, drag-and-drop between them."""
     story_selected = pyqtSignal(str)        # issue key clicked on card
     transition_requested = pyqtSignal(str, str)  # (key, new_status_name)
+    new_story_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._columns: dict[str, KanbanColumn] = {}
         self._sp_field = ""
+        self._last_issues: list = []   # cache so tab switch doesn't re-render
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -3517,6 +3826,10 @@ class KanbanBoardWidget(QWidget):
         title.setObjectName("heading")
         hdr.addWidget(title)
         hdr.addStretch()
+        new_btn = QPushButton("＋  New Story")
+        new_btn.setObjectName("toolbar_btn")
+        new_btn.clicked.connect(self.new_story_requested.emit)
+        hdr.addWidget(new_btn)
         self._status_lbl = QLabel("No stories loaded")
         self._status_lbl.setObjectName("dim")
         hdr.addWidget(self._status_lbl)
@@ -3542,8 +3855,13 @@ class KanbanBoardWidget(QWidget):
         scroll.setStyleSheet("QScrollArea { border: none; }")
         layout.addWidget(scroll, 1)
 
-    def populate(self, issues: list, sp_field: str):
-        self._sp_field = sp_field
+    def populate(self, issues: list, sp_field: str, force: bool = False):
+        """Populate board. Skips re-render if issues unchanged and force=False."""
+        if not force and issues is self._last_issues and sp_field == self._sp_field:
+            return
+        self._last_issues = issues
+        self._sp_field    = sp_field
+
         for col in self._columns.values():
             col.clear_cards()
 
@@ -3552,7 +3870,6 @@ class KanbanBoardWidget(QWidget):
             status = (issue.get("fields", {}).get("status") or {}).get("name", "")
             col = self._columns.get(status)
             if col is None:
-                # Put unknown statuses in "To Do"
                 col = self._columns.get("To Do")
                 ungrouped += 1
             if col:
@@ -3566,6 +3883,10 @@ class KanbanBoardWidget(QWidget):
             + (f" ({ungrouped} in unknown status → To Do)" if ungrouped else "")
         )
 
+    def refresh(self, issues: list, sp_field: str):
+        """Force re-render (used after a transition)."""
+        self.populate(issues, sp_field, force=True)
+
     def _on_card_dropped(self, key: str, new_status: str):
         self.transition_requested.emit(key, new_status)
 
@@ -3573,12 +3894,14 @@ class KanbanBoardWidget(QWidget):
 # ── Backlog View ───────────────────────────────────────────────────────────────
 class BacklogWidget(QWidget):
     """Shows stories not assigned to any sprint (backlog items)."""
-    story_selected = pyqtSignal(str)
+    story_selected   = pyqtSignal(str)
+    move_to_sprint   = pyqtSignal(str, int)   # (issue_key, sprint_id)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._issues: list = []
         self._sp_field     = ""
+        self._sprints: list = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -3602,14 +3925,30 @@ class BacklogWidget(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        # Filter bar
+        # Filter + move-to-sprint bar
         fb = QHBoxLayout()
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter backlog…")
-        self._search.setMaximumWidth(280)
+        self._search.setMaximumWidth(260)
         self._search.textChanged.connect(self._filter)
         fb.addWidget(self._search)
         fb.addStretch()
+        fb.addWidget(QLabel("Move selected to sprint:"))
+        self._sprint_combo = QComboBox()
+        self._sprint_combo.setMinimumWidth(200)
+        self._sprint_combo.addItem("— select sprint —", None)
+        fb.addWidget(self._sprint_combo)
+        self._move_btn = QPushButton("⇧  Move")
+        self._move_btn.setObjectName("toolbar_btn")
+        self._move_btn.setEnabled(False)
+        self._move_btn.clicked.connect(self._on_move_clicked)
+        fb.addWidget(self._move_btn)
+        fb.addSpacing(12)
+        self._export_btn = QPushButton("⬇  Export CSV")
+        self._export_btn.setObjectName("toolbar_btn")
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self._export_csv)
+        fb.addWidget(self._export_btn)
         layout.addLayout(fb)
 
         self._table = QTableWidget()
@@ -3626,12 +3965,26 @@ class BacklogWidget(QWidget):
         hh.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
         self._table.setSortingEnabled(True)
-        self._table.itemSelectionChanged.connect(self._on_selected)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self._table, 1)
+
+    def set_sprints(self, sprints: list):
+        """Update the sprint combo for move-to-sprint."""
+        self._sprints = sprints
+        self._sprint_combo.blockSignals(True)
+        self._sprint_combo.clear()
+        self._sprint_combo.addItem("— select sprint —", None)
+        for s in sprints:
+            state = s.get("state", "")
+            self._sprint_combo.addItem(f"[{state.upper()}] {s['name']}", s["id"])
+            if state.lower() == "active":
+                self._sprint_combo.setCurrentIndex(self._sprint_combo.count() - 1)
+        self._sprint_combo.blockSignals(False)
 
     def populate(self, issues: list, sp_field: str):
         self._issues   = issues
@@ -3677,6 +4030,7 @@ class BacklogWidget(QWidget):
 
         self._table.setSortingEnabled(True)
         self._count_lbl.setText(f"{len(issues)} backlog items")
+        self._export_btn.setEnabled(bool(issues))
 
     def _filter(self, text: str):
         term = text.lower()
@@ -3688,13 +4042,77 @@ class BacklogWidget(QWidget):
             )
             self._table.setRowHidden(row, not match)
 
-    def _on_selected(self):
-        row = self._table.currentRow()
-        if row < 0:
+    def _on_selection_changed(self):
+        has_sel  = bool(self._table.selectedItems())
+        has_sprint = self._sprint_combo.currentData() is not None
+        self._move_btn.setEnabled(has_sel and has_sprint)
+
+        rows = list({idx.row() for idx in self._table.selectedIndexes()})
+        if len(rows) == 1:
+            item = self._table.item(rows[0], 0)
+            if item:
+                self.story_selected.emit(item.text())
+
+    def _on_move_clicked(self):
+        sprint_id = self._sprint_combo.currentData()
+        if sprint_id is None:
             return
-        item = self._table.item(row, 0)
-        if item:
-            self.story_selected.emit(item.text())
+        rows = list({idx.row() for idx in self._table.selectedIndexes()})
+        keys = []
+        for r in rows:
+            it = self._table.item(r, 0)
+            if it:
+                keys.append(it.text())
+        if not keys:
+            return
+        sprint_name = self._sprint_combo.currentText()
+        reply = QMessageBox.question(
+            self, "Move to Sprint",
+            f"Move {len(keys)} stor{'ies' if len(keys) != 1 else 'y'} to:\n{sprint_name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        for key in keys:
+            self.move_to_sprint.emit(key, sprint_id)
+
+    def _export_csv(self):
+        if not self._issues:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Backlog", "backlog.csv", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["key", "summary", "assignee", "priority",
+                             "story_points", "issue_type", "due_date"])
+                for iss in self._issues:
+                    fld     = iss.get("fields", {})
+                    aobj    = fld.get("assignee") or {}
+                    pts_raw = next(
+                        (fld.get(k) for k in ([self._sp_field] + JiraClient._SP_FALLBACKS)
+                         if fld.get(k) is not None), None
+                    )
+                    try:
+                        pts = str(int(float(pts_raw))) if pts_raw is not None else ""
+                    except (TypeError, ValueError):
+                        pts = ""
+                    w.writerow([
+                        iss.get("key", ""),
+                        fld.get("summary", ""),
+                        aobj.get("displayName") or aobj.get("name") or "",
+                        (fld.get("priority") or {}).get("name", ""),
+                        pts,
+                        (fld.get("issuetype") or {}).get("name", ""),
+                        (fld.get("duedate") or "")[:10],
+                    ])
+            QMessageBox.information(self, "Exported", f"Backlog exported to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
@@ -3928,6 +4346,12 @@ class MainWindow(QMainWindow):
         self.report_btn.clicked.connect(self._open_sprint_report)
         self.report_btn.setEnabled(False)
         fb_row2.addWidget(self.report_btn)
+        self.velocity_btn = QPushButton("📈  Velocity")
+        self.velocity_btn.setObjectName("toolbar_btn")
+        self.velocity_btn.setToolTip("Show velocity history across recent sprints")
+        self.velocity_btn.clicked.connect(self._open_velocity_history)
+        self.velocity_btn.setEnabled(False)
+        fb_row2.addWidget(self.velocity_btn)
         self.archive_btn = QPushButton("🗄  Archive")
         self.archive_btn.setObjectName("toolbar_btn")
         self.archive_btn.setToolTip("Archive selected story or choose stories to archive")
@@ -4019,6 +4443,21 @@ class MainWindow(QMainWindow):
         self.quick_add_edit.setEnabled(False)
         self.quick_add_edit.returnPressed.connect(self._quick_add_story)
         _qbl.addWidget(self.quick_add_edit)
+        # Rank buttons
+        self._rank_up_btn = QPushButton("↑ Rank Up")
+        self._rank_up_btn.setObjectName("toolbar_btn")
+        self._rank_up_btn.setFixedHeight(28)
+        self._rank_up_btn.setToolTip("Move selected story up one position in the sprint ranking")
+        self._rank_up_btn.setEnabled(False)
+        self._rank_up_btn.clicked.connect(lambda: self._rank_selected(-1))
+        _qbl.addWidget(self._rank_up_btn)
+        self._rank_down_btn = QPushButton("↓ Rank Down")
+        self._rank_down_btn.setObjectName("toolbar_btn")
+        self._rank_down_btn.setFixedHeight(28)
+        self._rank_down_btn.setToolTip("Move selected story down one position in the sprint ranking")
+        self._rank_down_btn.setEnabled(False)
+        self._rank_down_btn.clicked.connect(lambda: self._rank_selected(1))
+        _qbl.addWidget(self._rank_down_btn)
         left_layout.addWidget(quick_bar)
 
         splitter.addWidget(left)
@@ -4043,6 +4482,9 @@ class MainWindow(QMainWindow):
         self.kanban_widget = KanbanBoardWidget()
         self.kanban_widget.story_selected.connect(self._on_kanban_story_selected)
         self.kanban_widget.transition_requested.connect(self._on_kanban_transition)
+        self.kanban_widget.new_story_requested.connect(
+            lambda: self.new_story_btn.click() if self.new_story_btn.isEnabled() else None
+        )
         self.tabs.addTab(self.kanban_widget, "⊞  KANBAN")
 
         # ── Backlog tab ───────────────────────────────────────────────────────
@@ -4066,6 +4508,7 @@ class MainWindow(QMainWindow):
 
         self.backlog_widget = BacklogWidget()
         self.backlog_widget.story_selected.connect(self._on_backlog_story_selected)
+        self.backlog_widget.move_to_sprint.connect(self._on_backlog_move_to_sprint)
         backlog_outer_layout.addWidget(self.backlog_widget, 1)
         self.tabs.addTab(backlog_outer, "☰  BACKLOG")
 
@@ -4196,7 +4639,7 @@ class MainWindow(QMainWindow):
 
     # ── Inline editing ────────────────────────────────────────────────────────
     def _on_cell_double_clicked(self, row: int, col: int):
-        """Inline-edit story points (PTS col) or assignee (ASSIGNEE col) on double-click."""
+        """Inline-edit story points, assignee, status, or due date on double-click."""
         key_item = self.table.item(row, COL_KEY)
         if not key_item:
             return
@@ -4209,6 +4652,10 @@ class MainWindow(QMainWindow):
             self._inline_edit_pts(row, key, issue)
         elif col == COL_ASSIGNEE:
             self._inline_edit_assignee(row, key, issue)
+        elif col == COL_STATUS:
+            self._inline_edit_status(row, key, issue)
+        elif col == COL_DUE_DATE:
+            self._inline_edit_due_date(row, key, issue)
 
     def _inline_edit_pts(self, row: int, key: str, issue: dict):
         """Pop a combo in-line to change story points without opening the full edit panel."""
@@ -4355,10 +4802,235 @@ class MainWindow(QMainWindow):
             ),
         )
 
-    # ── Kanban helpers ────────────────────────────────────────────────────────
+    def _inline_edit_status(self, row: int, key: str, issue: dict):
+        """Pop a transition combo in-line to change status without opening the full panel."""
+        if not self._client:
+            return
+        self._busy(True)
+        self._status(f"Fetching transitions for {key}…")
+
+        def _do():
+            return self._client.get_issue_transitions(key)
+
+        def _on_transitions(transitions):
+            self._busy(False)
+            if not transitions:
+                QMessageBox.information(self, "No Transitions", f"No transitions available for {key}.")
+                return
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Change Status — {key}")
+            dlg.setFixedSize(300, 140)
+            dlg.setStyleSheet(self.styleSheet())
+            layout = QVBoxLayout(dlg)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(10)
+            lbl = QLabel(f"Transition  <b>{key}</b>  to:")
+            lbl.setStyleSheet(f"color: {TEXT_PRI};")
+            layout.addWidget(lbl)
+            combo = QComboBox()
+            for t in transitions:
+                name = t.get("to", {}).get("name", t.get("name", ""))
+                combo.addItem(name, t["id"])
+            layout.addWidget(combo)
+            btns = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            btns.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
+            btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+            btns.accepted.connect(dlg.accept)
+            btns.rejected.connect(dlg.reject)
+            layout.addWidget(btns)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            tid   = combo.currentData()
+            tname = combo.currentText()
+            self._busy(True)
+            self._status(f"Transitioning {key} → {tname}…")
+            self._spawn(
+                self._client.transition_issue, key, tid,
+                on_result=lambda _: (
+                    self._busy(False),
+                    self._status(f"✓ {key} → {tname}"),
+                    self._load_sprint_issues(reselect_key=key),
+                ),
+                on_error=lambda e: (
+                    self._busy(False),
+                    self._status(f"✗ Transition failed: {e}"),
+                    QMessageBox.critical(self, "Transition Failed", str(e)),
+                ),
+            )
+
+        self._spawn(
+            _do,
+            on_result=_on_transitions,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Could not fetch transitions: {e}"),
+            ),
+        )
+
+    def _inline_edit_due_date(self, row: int, key: str, issue: dict):
+        """Pop a date picker in-line to change due date without opening the full panel."""
+        f       = issue.get("fields", {})
+        current = (f.get("duedate") or "")[:10]
+        dlg     = QDialog(self)
+        dlg.setWindowTitle(f"Set Due Date — {key}")
+        dlg.setFixedSize(300, 160)
+        dlg.setStyleSheet(self.styleSheet())
+        layout  = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        lbl = QLabel(f"Due date for  <b>{key}</b>:")
+        lbl.setStyleSheet(f"color: {TEXT_PRI};")
+        layout.addWidget(lbl)
+        picker = QDateEdit()
+        picker.setCalendarPopup(True)
+        picker.setDisplayFormat("yyyy-MM-dd")
+        if current:
+            try:
+                picker.setDate(QDate.fromString(current, "yyyy-MM-dd"))
+            except Exception:
+                picker.setDate(QDate.currentDate())
+        else:
+            picker.setDate(QDate.currentDate())
+        layout.addWidget(picker)
+        btn_row = QHBoxLayout()
+        clear_btn = QPushButton("Clear Date")
+        clear_btn.setObjectName("danger")
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        cleared = [False]
+        clear_btn.clicked.connect(lambda: (cleared.__setitem__(0, True), dlg.accept()))
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_date = None if cleared[0] else picker.date().toString("yyyy-MM-dd")
+        self._busy(True)
+        self._status(f"Updating due date for {key}…")
+        self._spawn(
+            self._client.update_issue, key, {"duedate": new_date},
+            on_result=lambda _: (
+                self._busy(False),
+                self._status(f"✓ {key} due date set to {new_date or 'none'}."),
+                self._load_sprint_issues(reselect_key=key),
+            ),
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Failed to update due date: {e}"),
+                QMessageBox.critical(self, "Update Failed", str(e)),
+            ),
+        )
+
+    # ── Velocity history ──────────────────────────────────────────────────────
+    def _open_velocity_history(self):
+        board_id = self.board_combo.currentData()
+        if not board_id or not self._client:
+            return
+        dlg = VelocityHistoryDialog(board_id, self._client, self)
+        dlg.exec()
+
+    # ── Story ranking ─────────────────────────────────────────────────────────
+    def _rank_selected(self, delta: int):
+        """Move the selected story up (delta=-1) or down (delta=1) one rank slot."""
+        visible = [r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)]
+        if not visible:
+            return
+        current = self.table.currentRow()
+        if current not in visible:
+            return
+        idx = visible.index(current)
+        target_idx = idx + delta
+        if target_idx < 0 or target_idx >= len(visible):
+            return
+        target_row = visible[target_idx]
+
+        key_item    = self.table.item(current, COL_KEY)
+        target_item = self.table.item(target_row, COL_KEY)
+        if not key_item or not target_item:
+            return
+        key        = key_item.text()
+        target_key = target_item.text()
+
+        self._busy(True)
+        self._status(f"Ranking {key}…")
+
+        rank_before = target_key if delta < 0 else ""
+        rank_after  = target_key if delta > 0 else ""
+
+        def _do():
+            self._client.rank_issue(key, rank_before_key=rank_before, rank_after_key=rank_after)
+
+        def _on_done(_):
+            self._busy(False)
+            self._status(f"✓ {key} re-ranked.")
+            self._load_sprint_issues(reselect_key=key)
+
+        self._spawn(
+            _do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"⚠ Ranking not supported or failed: {e}"),
+                QMessageBox.warning(
+                    self, "Rank Failed",
+                    f"Could not re-rank {key}.\n\n"
+                    "Ranking requires the board to have ranking enabled "
+                    "and the Agile rank field to be writable.\n\n"
+                    f"Detail: {e}",
+                ),
+            ),
+        )
+
+    # ── Backlog move-to-sprint ────────────────────────────────────────────────
+    def _on_backlog_move_to_sprint(self, key: str, sprint_id: int):
+        """Move a backlog story into the given sprint."""
+        if not self._client:
+            return
+        self._busy(True)
+        self._status(f"Moving {key} to sprint…")
+
+        def _do():
+            self._client.move_to_sprint(key, sprint_id)
+
+        def _on_done(_):
+            self._busy(False)
+            self._status(f"✓ {key} moved to sprint.")
+            # Remove from backlog display
+            for row in range(self.backlog_widget._table.rowCount()):
+                it = self.backlog_widget._table.item(row, 0)
+                if it and it.text() == key:
+                    self.backlog_widget._table.removeRow(row)
+                    self.backlog_widget._issues = [
+                        i for i in self.backlog_widget._issues if i.get("key") != key
+                    ]
+                    n = len(self.backlog_widget._issues)
+                    self.backlog_widget._count_lbl.setText(f"{n} backlog items")
+                    break
+
+        self._spawn(
+            _do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Failed to move {key}: {e}"),
+                QMessageBox.critical(self, "Move Failed", str(e)),
+            ),
+        )
     def _switch_to_kanban(self):
         self.tabs.setCurrentIndex(1)
         if self._issues:
+            # populate() skips re-render if issues identity unchanged
             self.kanban_widget.populate(self._issues, self._sp_field)
 
     def _on_kanban_story_selected(self, key: str):
@@ -4372,7 +5044,14 @@ class MainWindow(QMainWindow):
                 break
 
     def _on_kanban_transition(self, key: str, new_status_name: str):
-        """Card was dragged to a new column — find and apply the matching transition."""
+        """Card was dragged to a new column — find and apply the matching transition.
+
+        Matching strategy:
+        1. Exact match on the transition's *target* status name.
+        2. Case-insensitive exact match on the target status name.
+        3. Fuzzy: target status name starts-with or contains the requested name.
+        4. Fuzzy: the *transition* name itself contains the requested name.
+        """
         if not self._client:
             return
         self._busy(True)
@@ -4380,28 +5059,44 @@ class MainWindow(QMainWindow):
 
         def _do():
             transitions = self._client.get_issue_transitions(key)
-            match = next(
-                (t for t in transitions
-                 if t.get("to", {}).get("name", "").lower() == new_status_name.lower()),
-                None,
-            )
-            if not match:
+            target_lc   = new_status_name.lower()
+
+            def _score(t):
+                to_name   = (t.get("to") or {}).get("name", "")
+                tr_name   = t.get("name", "")
+                to_lc     = to_name.lower()
+                tr_lc     = tr_name.lower()
+                if to_lc == target_lc:
+                    return 4
+                if to_lc.startswith(target_lc) or target_lc in to_lc:
+                    return 3
+                if tr_lc == target_lc:
+                    return 2
+                if tr_lc.startswith(target_lc) or target_lc in tr_lc:
+                    return 1
+                return 0
+
+            scored = sorted(transitions, key=_score, reverse=True)
+            best   = scored[0] if scored and _score(scored[0]) > 0 else None
+            if not best:
                 raise RuntimeError(
-                    f'No transition to "{new_status_name}" available for {key}.'
+                    f'No transition matching "{new_status_name}" found for {key}.\n'
+                    f'Available transitions: {", ".join(t.get("name","?") for t in transitions)}'
                 )
-            self._client.transition_issue(key, match["id"])
+            self._client.transition_issue(key, best["id"])
 
         def _on_done(_):
             self._busy(False)
             self._status(f"✓ {key} → {new_status_name}")
-            # Refresh issues and repopulate Kanban
             self._spawn(
                 self._client.get_sprint_issues,
                 self.board_combo.currentData(),
                 self.sprint_combo.currentData(),
                 on_result=lambda issues: (
-                    self._on_issues_loaded(issues),
-                    self.kanban_widget.populate(issues, self._sp_field),
+                    setattr(self, '_issues', issues),
+                    self._populate_table(issues),
+                    self._update_velocity_bar(),
+                    self.kanban_widget.refresh(issues, self._sp_field),
                 ),
             )
 
@@ -4412,32 +5107,31 @@ class MainWindow(QMainWindow):
                 self._busy(False),
                 self._status(f"✗ Transition failed: {e}"),
                 QMessageBox.warning(self, "Transition Failed", str(e)),
-                # Re-render Kanban to reset card positions
-                self.kanban_widget.populate(self._issues, self._sp_field),
+                self.kanban_widget.refresh(self._issues, self._sp_field),
             ),
         )
 
     # ── Backlog helpers ───────────────────────────────────────────────────────
     def _load_backlog(self):
-        """Fetch issues not in any sprint for the current project."""
+        """Fetch issues not in any sprint for the current project.
+
+        Tries `sprint is EMPTY` first (standard DC). Falls back to
+        `sprint not in openSprints() AND sprint not in closedSprints()` if the
+        first form is rejected (some older instances don't support it).
+        """
         project_key = self.project_combo.currentData()
         if not project_key or not self._client:
             return
         self._busy(True)
         self._status("Loading backlog…")
 
-        def _do():
-            sp   = self._sp_field
-            jql  = (
-                f'project = "{project_key}" '
-                f'AND sprint is EMPTY AND statusCategory != Done '
-                f'ORDER BY priority DESC, updated DESC'
-            )
-            encoded = urllib.parse.quote(jql)
+        def _fetch(jql: str) -> list:
+            sp      = self._sp_field
             fields  = ",".join([
                 "summary", "assignee", "status", "priority", "issuetype",
                 "duedate", sp, "comment",
             ])
+            encoded = urllib.parse.quote(jql)
             all_issues: list = []
             start = 0
             max_results = 100
@@ -4455,6 +5149,25 @@ class MainWindow(QMainWindow):
                     break
                 start += max_results
             return all_issues
+
+        def _do():
+            base = f'project = "{project_key}" AND statusCategory != Done'
+            try:
+                return _fetch(f"{base} AND sprint is EMPTY ORDER BY priority DESC, updated DESC")
+            except Exception as e1:
+                # Fallback for instances where 'sprint is EMPTY' isn't supported
+                try:
+                    return _fetch(
+                        f"{base} AND sprint not in openSprints() "
+                        f"AND sprint not in closedSprints() "
+                        f"ORDER BY priority DESC, updated DESC"
+                    )
+                except Exception as e2:
+                    raise RuntimeError(
+                        f"Could not load backlog.\n"
+                        f"Primary JQL failed: {e1}\n"
+                        f"Fallback JQL failed: {e2}"
+                    )
 
         def _on_done(issues):
             self._busy(False)
@@ -4940,7 +5653,20 @@ class MainWindow(QMainWindow):
 
     _MAX_WORKERS = 5
 
-    def _spawn(self, fn, *args, on_result=None, on_error=None):
+    @staticmethod
+    def _error_dialog(parent, title: str, message: str, retry_fn=None):
+        """Show an error dialog with an optional Retry button."""
+        msg = QMessageBox(parent)
+        msg.setWindowTitle(title)
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setText(message)
+        retry_btn = msg.addButton("↩  Retry", QMessageBox.ButtonRole.AcceptRole) if retry_fn else None
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        if retry_fn and msg.clickedButton() == retry_btn:
+            retry_fn()
+
+    def _spawn(self, fn, *args, on_result=None, on_error=None, retry_fn=None):
         active = sum(1 for w in self._workers if w.isRunning())
         if active >= self._MAX_WORKERS:
             self._status(f"⚠ Too many background tasks in flight ({active}); please wait.")
@@ -4951,8 +5677,11 @@ class MainWindow(QMainWindow):
         if on_error:
             w.error.connect(on_error)
         else:
-            w.error.connect(lambda e: (self._busy(False), self._status(f"Error: {e}"),
-                                       QMessageBox.critical(self, "Error", e)))
+            def _default_err(e, _retry=retry_fn):
+                self._busy(False)
+                self._status(f"Error: {e}")
+                self._error_dialog(self, "Error", e, retry_fn=_retry)
+            w.error.connect(_default_err)
         w.finished.connect(lambda: self._workers.remove(w) if w in self._workers else None)
         self._workers.append(w)
         w.start()
@@ -5133,6 +5862,7 @@ class MainWindow(QMainWindow):
                     if str(self.sprint_combo.itemData(i)) == str(last_sid):
                         self.sprint_combo.setCurrentIndex(i); break
         self.edit_panel.set_sprints(sprints)
+        self.backlog_widget.set_sprints(sprints)
 
     def _load_sprint_issues(self, reselect_key: str = None):
         bid = self.board_combo.currentData()
@@ -5189,12 +5919,13 @@ class MainWindow(QMainWindow):
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
         self.report_btn.setEnabled(True)
+        self.velocity_btn.setEnabled(True)
         self.archive_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
         self.load_backlog_btn.setEnabled(True)
-        # Refresh Kanban if it is currently visible
+        # Refresh Kanban only if already visible (avoid re-render on hidden tab)
         if self.tabs.currentIndex() == 1:
-            self.kanban_widget.populate(issues, self._sp_field)
+            self.kanban_widget.populate(issues, self._sp_field, force=True)
         reselect = self._reselect_key
         if reselect:
             for row in range(self.table.rowCount()):
@@ -5382,6 +6113,8 @@ class MainWindow(QMainWindow):
             return
 
         self.edit_panel.load_issue(issue)
+        self._rank_up_btn.setEnabled(True)
+        self._rank_down_btn.setEnabled(True)
         # Re-wire attach button to current issue key
         try:
             self.edit_panel.attach_btn.clicked.disconnect()
@@ -6113,45 +6846,107 @@ class MainWindow(QMainWindow):
 
     def _on_compare_loaded(self, compare_issues):
         self._busy(False)
-        sp = self._sp_field
-        cmap = {i["key"]: i for i in compare_issues}
-        curmap = {i["key"]: i for i in self._issues}
-        moved_bg = QColor("#1A3A1A"); changed_bg = QColor("#1A2A3A")
+        sp      = self._sp_field
+        cmap    = {i["key"]: i for i in compare_issues}
+        curmap  = {i["key"]: i for i in self._issues}
+        moved_bg   = QColor("#1A3A1A")
+        changed_bg = QColor("#1A2A3A")
+
         def _fld(iss, *path):
             obj = iss.get("fields") or {}
-            for p in path: obj = (obj or {}).get(p) or {}
+            for p in path:
+                obj = (obj or {}).get(p) or {}
             return obj if isinstance(obj, str) else ""
+
+        # Build diff records for export
+        self._compare_label   = self.compare_combo.currentText()
+        self._compare_records = []   # list of dicts for CSV export
+
         n_new = n_changed = 0
         for row in range(self.table.rowCount()):
             ki = self.table.item(row, 0)
-            if not ki: continue
+            if not ki:
+                continue
             key = ki.text()
+            rec = {"key": key, "change_type": "", "diffs": ""}
             if key not in cmap:
                 for col in range(self.table.columnCount()):
                     it = self.table.item(row, col)
-                    if it: it.setBackground(moved_bg)
+                    if it:
+                        it.setBackground(moved_bg)
                 n_new += 1
+                rec["change_type"] = "added"
             else:
                 curr, prev = curmap[key], cmap[key]
                 diffs = []
-                for lbl, *path in [("status","status","name"),("assignee","assignee","displayName")]:
+                for lbl, *path in [("status", "status", "name"), ("assignee", "assignee", "displayName")]:
                     cv, pv = _fld(curr, *path), _fld(prev, *path)
-                    if cv != pv: diffs.append(f"{lbl}: {pv or '—'} → {cv or '—'}")
+                    if cv != pv:
+                        diffs.append(f"{lbl}: {pv or '—'} → {cv or '—'}")
                 try:
                     _cv = (curr.get("fields") or {}).get(sp)
                     _pv = (prev.get("fields") or {}).get(sp)
-                    cp = int(float(_cv)) if _cv is not None else None
-                    pp = int(float(_pv)) if _pv is not None else None
-                except (TypeError, ValueError): cp = pp = None
-                if cp != pp: diffs.append(f"pts: {pp} → {cp}")
+                    cp  = int(float(_cv)) if _cv is not None else None
+                    pp  = int(float(_pv)) if _pv is not None else None
+                except (TypeError, ValueError):
+                    cp = pp = None
+                if cp != pp:
+                    diffs.append(f"pts: {pp} → {cp}")
                 if diffs:
                     for col in range(self.table.columnCount()):
                         it = self.table.item(row, col)
-                        if it: it.setBackground(changed_bg)
+                        if it:
+                            it.setBackground(changed_bg)
                     ki.setToolTip("\n".join(diffs))
                     n_changed += 1
+                    rec["change_type"] = "changed"
+                    rec["diffs"]       = "; ".join(diffs)
+            if rec["change_type"]:
+                self._compare_records.append(rec)
+
+        for key in cmap:
+            if key not in curmap:
+                self._compare_records.append({"key": key, "change_type": "removed", "diffs": ""})
+
         n_removed = sum(1 for k in cmap if k not in curmap)
-        self._status(f"Compare vs {self.compare_combo.currentText()}: {n_new} added, {n_removed} removed, {n_changed} changed. Hover KEY for details.")
+        summary = (f"Compare vs {self._compare_label}: "
+                   f"{n_new} added, {n_removed} removed, {n_changed} changed. "
+                   "Hover KEY for details.")
+        self._status(summary)
+
+        if self._compare_records:
+            reply = QMessageBox.question(
+                self, "Compare Complete",
+                f"{summary}\n\nExport the diff to CSV?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._export_compare_csv()
+
+    def _export_compare_csv(self):
+        """Export the most recent sprint comparison diff to CSV."""
+        records = getattr(self, "_compare_records", [])
+        if not records:
+            return
+        label   = getattr(self, "_compare_label", "compare")
+        slug    = re.sub(r"[^\w\-]", "-", label)[:40]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Compare Export",
+            f"sprint-compare-{slug}-{date.today()}.csv",
+            "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["key", "change_type", "diffs"])
+                for r in records:
+                    w.writerow([r["key"], r["change_type"], r["diffs"]])
+            QMessageBox.information(self, "Exported", f"Compare diff saved to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
 
     def _duplicate_story(self, key: str):
         issue = next((i for i in self._issues if i["key"] == key), None)
@@ -6262,8 +7057,16 @@ class MainWindow(QMainWindow):
     def _open_sprint_report(self):
         if not self._issues:
             return
-        sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
-        board_id = self.board_combo.currentData() or 0
+        sprint_label  = self.sprint_lbl.text() or self.sprint_combo.currentText()
+        board_id      = self.board_combo.currentData() or 0
+        sprint_id     = self.sprint_combo.currentData()
+        # Fetch sprint detail for real start/end dates (best-effort, non-blocking)
+        sprint_detail = {}
+        if sprint_id and self._client:
+            try:
+                sprint_detail = self._client.get_sprint_detail(sprint_id)
+            except Exception:
+                pass
         dlg = SprintReportDialog(
             issues=self._issues,
             sprint_label=sprint_label,
@@ -6273,6 +7076,7 @@ class MainWindow(QMainWindow):
             adf_to_text_fn=self.edit_panel._adf_to_text,
             client=self._client,
             board_id=board_id,
+            sprint_detail=sprint_detail,
             parent=self,
         )
         dlg.exec()
