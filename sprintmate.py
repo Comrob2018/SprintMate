@@ -31,15 +31,18 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
     QFrame, QScrollArea, QDialog, QDialogButtonBox, QMessageBox,
     QGroupBox, QFormLayout, QListWidget, QListWidgetItem, QMenu,
-    QAbstractItemView, QProgressBar, QStatusBar, 
-    QTabWidget, QDateEdit, QFileDialog
+    QAbstractItemView, QProgressBar, QStatusBar,
+    QTabWidget, QDateEdit, QFileDialog, QRadioButton, QTextBrowser,
+    QSizePolicy, QToolButton, QScrollArea as QScrollAreaW,
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QDate, QTimer, QSettings, QModelIndex,
+    QMimeData, QPoint, QByteArray,
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtGui import (
-    QColor, QPalette, QKeySequence, QShortcut
+    QColor, QPalette, QKeySequence, QShortcut, QDrag, QPixmap,
+    QPainter, QFont,
 )
 FIBONACCI   = [0, 1, 2, 3, 5, 8, 13, 21]
 PRIORITIES  = ["Highest", "High", "Medium", "Low", "Lowest"]
@@ -95,9 +98,9 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.16.0"
+APP_VERSION  = "2.17.0"
 GITHUB_RAW_URL = (
-    "https://raw.githubusercontent.com/Comrob2018/jira_manager/main/sprintmate.py"
+    "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
 
 STYLESHEET = f"""
@@ -461,6 +464,27 @@ class JiraClient:
                 return result if isinstance(result, list) else result.get("values", [])
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"HTTP {e.code} [GET {url}]: {e.read().decode()}")
+
+    # All known story point field IDs across Jira DC configurations
+    _SP_FALLBACKS = [
+        "customfield_10016", "customfield_10006", "customfield_10106",
+        "customfield_10028", "customfield_10004", "story_points",
+    ]
+
+    def get_story_points(self, fields: dict):
+        """Read story points from a fields dict, trying the detected field first
+        then all known fallback field IDs. Returns a float or None."""
+        candidates = [self.story_point_field_id] + [
+            f for f in self._SP_FALLBACKS if f != self.story_point_field_id
+        ]
+        for key in candidates:
+            val = fields.get(key)
+            if val is not None:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    continue
+        return None
 
     def get_boards(self, project_key: str):
         url = f"{self.base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}"
@@ -1627,7 +1651,7 @@ class StoryEditPanel(QFrame):
         self._full_comment_text = ""
         self._comments_data = []  # full comment dicts including IDs
         self._pre_save_snapshot = None
-        self._sp_field = "customfield_10016"
+        self._sp_field = JiraClient._FIELD_MAP[JiraClient.MODE_SECONDARY]["story_point"]
         self._fl_field = "customfield_10100"
         self._base_url = ""
         self._build_ui()
@@ -2024,7 +2048,7 @@ class StoryEditPanel(QFrame):
                 self.priority_combo.setCurrentIndex(i)
                 break
 
-        pts = fields.get(self._sp_field) or fields.get("customfield_10016") or fields.get("story_points")
+        pts = next((fields.get(k) for k in ([self._sp_field] + JiraClient._SP_FALLBACKS) if fields.get(k) is not None), None)
         self.points_combo.setCurrentIndex(0)
         if pts is not None:
             try:
@@ -2531,7 +2555,7 @@ class SprintReportDialog(QDialog):
         def _do():
             return self._client.get_all_sprints(self._board_id)
 
-        worker = _Worker(_do)
+        worker = Worker(_do)
         worker.result.connect(self._on_sprints_loaded)
         worker.error.connect(lambda e: (
             self._sr_sprint_combo.addItem("Failed to load"),
@@ -2608,7 +2632,7 @@ class SprintReportDialog(QDialog):
                 f"<p style='color:#f78166;padding:20px;'>Error: {e}</p>"
             )
 
-        worker = _Worker(_do)
+        worker = Worker(_do)
         worker.result.connect(_on_done)
         worker.error.connect(_on_err)
         worker.start()
@@ -2630,7 +2654,7 @@ class SprintReportDialog(QDialog):
             status = (f.get("status") or {}).get("name", "—")
             status_counts[status] = status_counts.get(status, 0) + 1
 
-            pts_raw = f.get(sp) or f.get("customfield_10016")
+            pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
             try:
                 pts = int(float(pts_raw)) if pts_raw is not None else 0
             except (TypeError, ValueError):
@@ -2693,7 +2717,7 @@ class SprintReportDialog(QDialog):
             due    = (f.get("duedate") or "")[:10] or "—"
             aobj   = f.get("assignee") or {}
             aname  = aobj.get("displayName") or aobj.get("name") or "—"
-            pts_raw = f.get(sp) or f.get("customfield_10016")
+            pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
             try:
                 pts_str = str(int(float(pts_raw))) if pts_raw is not None else "—"
             except (TypeError, ValueError):
@@ -2749,6 +2773,9 @@ class SprintReportDialog(QDialog):
             for s, c in sorted(status_counts.items(), key=lambda x: -x[1])
         )
 
+        # ── Burndown chart (ideal vs simulated remaining) ─────────────────────
+        burndown_svg = self._build_burndown_svg(total_pts, done_pts, n_total, n_done)
+
         td = "padding:8px 12px;border-bottom:1px solid #e0e0e0;"
         th = ("padding:8px 12px;background:#f6f8fa;font-size:11px;letter-spacing:.5px;"
               "text-transform:uppercase;border-bottom:2px solid #d0d7de;text-align:left;")
@@ -2797,6 +2824,9 @@ class SprintReportDialog(QDialog):
   </div>
 </div>
 
+<h2>Burndown</h2>
+{burndown_svg}
+
 <h2>Status Breakdown</h2>
 <table>
   <tr><th>Status</th><th>Count</th><th>%</th></tr>
@@ -2824,6 +2854,122 @@ class SprintReportDialog(QDialog):
 </html>"""
 
         self._browser.setHtml(self._html)
+
+    def _build_burndown_svg(self, total_pts: int, done_pts: int,
+                            n_total: int, n_done: int) -> str:
+        """Generate a simple SVG burndown chart: ideal line vs current remaining."""
+        W, H      = 700, 220
+        PAD_L     = 56
+        PAD_R     = 24
+        PAD_T     = 20
+        PAD_B     = 40
+        chart_w   = W - PAD_L - PAD_R
+        chart_h   = H - PAD_T - PAD_B
+
+        # We model a 14-day sprint; x-axis = days, y-axis = remaining points
+        sprint_days = 14
+        remaining   = max(0, total_pts - done_pts)
+        pct_elapsed = min(1.0, done_pts / total_pts) if total_pts else 0.0
+        # Estimate day based on work done so far
+        current_day = round(pct_elapsed * sprint_days)
+
+        def px(day: int) -> int:
+            return PAD_L + round(day / sprint_days * chart_w)
+
+        def py(pts: int) -> int:
+            if total_pts == 0:
+                return PAD_T + chart_h
+            return PAD_T + chart_h - round(pts / total_pts * chart_h)
+
+        # Ideal burndown: straight line from (0, total) to (sprint_days, 0)
+        ideal_x1, ideal_y1 = px(0), py(total_pts)
+        ideal_x2, ideal_y2 = px(sprint_days), py(0)
+
+        # Actual: starts at (0, total), stays flat until today, drops to remaining
+        actual_pts = [
+            (0,           total_pts),
+            (current_day, remaining),
+        ]
+
+        actual_d = " ".join(
+            f"{'M' if i == 0 else 'L'}{px(d)},{py(p)}"
+            for i, (d, p) in enumerate(actual_pts)
+        )
+
+        # X-axis tick labels (every 2 days)
+        x_ticks = "".join(
+            f'<text x="{px(d)}" y="{PAD_T + chart_h + 18}" '
+            f'text-anchor="middle" fill="#57606a" font-size="10">{d}</text>'
+            for d in range(0, sprint_days + 1, 2)
+        )
+        # Y-axis tick labels (4 ticks)
+        y_ticks = "".join(
+            f'<text x="{PAD_L - 8}" y="{py(v) + 4}" '
+            f'text-anchor="end" fill="#57606a" font-size="10">{v}</text>'
+            f'<line x1="{PAD_L}" y1="{py(v)}" x2="{PAD_L + chart_w}" y2="{py(v)}" '
+            f'stroke="#e0e0e0" stroke-width="1"/>'
+            for v in [0, total_pts // 4, total_pts // 2, total_pts * 3 // 4, total_pts]
+            if total_pts > 0
+        )
+
+        # Shaded area under actual line
+        shade_d = (
+            f"M{px(0)},{py(total_pts)} "
+            f"{actual_d[1:]} "
+            f"L{px(current_day)},{PAD_T + chart_h} "
+            f"L{px(0)},{PAD_T + chart_h} Z"
+        )
+
+        svg = f"""<div style="margin:16px 0;">
+<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg"
+     style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <!-- Background -->
+  <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}"
+        fill="#f6f8fa" rx="4"/>
+  <!-- Grid lines and y-axis labels -->
+  {y_ticks}
+  <!-- Shaded actual area -->
+  <path d="{shade_d}" fill="#388bfd" fill-opacity="0.10"/>
+  <!-- Ideal burndown line -->
+  <line x1="{ideal_x1}" y1="{ideal_y1}" x2="{ideal_x2}" y2="{ideal_y2}"
+        stroke="#d0d7de" stroke-width="2" stroke-dasharray="6,4"/>
+  <!-- Actual burndown line -->
+  <path d="{actual_d}" fill="none" stroke="#388bfd" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Remaining point marker -->
+  <circle cx="{px(current_day)}" cy="{py(remaining)}" r="5"
+          fill="#388bfd" stroke="#ffffff" stroke-width="2"/>
+  <!-- Axes -->
+  <line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T + chart_h}"
+        stroke="#d0d7de" stroke-width="1"/>
+  <line x1="{PAD_L}" y1="{PAD_T + chart_h}"
+        x2="{PAD_L + chart_w}" y2="{PAD_T + chart_h}"
+        stroke="#d0d7de" stroke-width="1"/>
+  {x_ticks}
+  <!-- Axis labels -->
+  <text x="{PAD_L + chart_w // 2}" y="{H - 4}" text-anchor="middle"
+        fill="#57606a" font-size="11">Sprint Day</text>
+  <text x="12" y="{PAD_T + chart_h // 2}" text-anchor="middle"
+        fill="#57606a" font-size="11"
+        transform="rotate(-90,12,{PAD_T + chart_h // 2})">Points Remaining</text>
+  <!-- Legend -->
+  <line x1="{PAD_L + chart_w - 160}" y1="{PAD_T + 12}"
+        x2="{PAD_L + chart_w - 140}" y2="{PAD_T + 12}"
+        stroke="#d0d7de" stroke-width="2" stroke-dasharray="6,4"/>
+  <text x="{PAD_L + chart_w - 136}" y="{PAD_T + 16}"
+        fill="#57606a" font-size="10">Ideal</text>
+  <line x1="{PAD_L + chart_w - 100}" y1="{PAD_T + 12}"
+        x2="{PAD_L + chart_w - 80}" y2="{PAD_T + 12}"
+        stroke="#388bfd" stroke-width="2.5"/>
+  <text x="{PAD_L + chart_w - 76}" y="{PAD_T + 16}"
+        fill="#57606a" font-size="10">Actual</text>
+</svg>
+<p style="font-size:11px;color:#57606a;margin:4px 0 0;">
+  {total_pts} total pts · {done_pts} done · {remaining} remaining
+  · estimated day {current_day} of {sprint_days}
+</p>
+</div>"""
+        return svg
 
     def _save_html(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -2924,7 +3070,7 @@ class SprintReportDialog(QDialog):
                 f"<p style='color:#f78166;padding:20px;'>Error: {e}</p>"
             )
 
-        worker = _Worker(_do)
+        worker = Worker(_do)
         worker.result.connect(_on_done)
         worker.error.connect(_on_err)
         worker.start()
@@ -2955,7 +3101,7 @@ class SprintReportDialog(QDialog):
             rec["display"] = aobj.get("displayName") or aname
 
             status = (f.get("status") or {}).get("name", "—")
-            pts_raw = f.get(sp) or f.get("customfield_10016")
+            pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
             try:
                 pts = int(float(pts_raw)) if pts_raw is not None else 0
             except (TypeError, ValueError):
@@ -3045,7 +3191,7 @@ class SprintReportDialog(QDialog):
                 pri    = (f.get("priority") or {}).get("name", "—")
                 itype  = (f.get("issuetype") or {}).get("name", "—")
                 due    = (f.get("duedate") or "")[:10] or "—"
-                pts_raw = f.get(sp) or f.get("customfield_10016")
+                pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
                 try:
                     pts_str = str(int(float(pts_raw))) if pts_raw is not None else "—"
                 except (TypeError, ValueError):
@@ -3149,6 +3295,408 @@ class SprintReportDialog(QDialog):
             QMessageBox.critical(self, "Save Failed", str(e))
 
 
+# ── Kanban Board ──────────────────────────────────────────────────────────────
+KANBAN_STATUSES = ["To Do", "In Progress", "In Review", "Done", "Blocked"]
+KANBAN_MIME     = "application/x-sprintmate-kanban-key"
+
+
+class KanbanCard(QFrame):
+    """Single draggable story card on the Kanban board."""
+    clicked = pyqtSignal(str)  # emits issue key
+
+    def __init__(self, issue: dict, sp_field: str, parent=None):
+        super().__init__(parent)
+        self._key   = issue.get("key", "")
+        self._issue = issue
+        self.setObjectName("card")
+        self.setFixedWidth(220)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAcceptDrops(False)
+
+        f       = issue.get("fields", {})
+        summary = f.get("summary", "")[:80]
+        aobj    = f.get("assignee") or {}
+        assignee = aobj.get("displayName") or aobj.get("name") or "—"
+        pts_raw = next((f.get(k) for k in ([sp_field] + JiraClient._SP_FALLBACKS)
+                        if f.get(k) is not None), None)
+        try:
+            pts = str(int(float(pts_raw))) if pts_raw is not None else "—"
+        except (TypeError, ValueError):
+            pts = "—"
+        status  = (f.get("status") or {}).get("name", "")
+        color   = STATUS_COLORS.get(status, TEXT_SEC)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(4)
+
+        key_lbl = QLabel(self._key)
+        key_lbl.setStyleSheet(f"color: {ACCENT_CYAN}; font-size: 11px; font-weight: bold;")
+        layout.addWidget(key_lbl)
+
+        sum_lbl = QLabel(summary)
+        sum_lbl.setWordWrap(True)
+        sum_lbl.setStyleSheet(f"color: {TEXT_PRI}; font-size: 12px;")
+        layout.addWidget(sum_lbl)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+        a_lbl = QLabel(assignee)
+        a_lbl.setStyleSheet(f"color: {TEXT_SEC}; font-size: 10px;")
+        a_lbl.setMaximumWidth(130)
+        footer.addWidget(a_lbl, 1)
+        pts_lbl = QLabel(f"◈ {pts} pts")
+        pts_lbl.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold;")
+        footer.addWidget(pts_lbl)
+        layout.addLayout(footer)
+
+        self.setStyleSheet(f"""
+            KanbanCard {{
+                background-color: {CARD_BG};
+                border: 1px solid {BORDER};
+                border-left: 3px solid {color};
+                border-radius: 6px;
+            }}
+            KanbanCard:hover {{
+                border-color: {ACCENT_BLUE};
+                border-left-color: {color};
+            }}
+        """)
+
+    @property
+    def key(self):
+        return self._key
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if (event.position().toPoint() - self._drag_start).manhattanLength() < 10:
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(KANBAN_MIME, self._key.encode())
+        drag.setMimeData(mime)
+        # Render a ghost pixmap
+        pix = QPixmap(self.size())
+        pix.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pix)
+        painter.setOpacity(0.75)
+        self.render(painter)
+        painter.end()
+        drag.setPixmap(pix)
+        drag.setHotSpot(self._drag_start)
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if (event.position().toPoint() - getattr(self, '_drag_start', QPoint())).manhattanLength() < 10:
+                self.clicked.emit(self._key)
+        super().mouseReleaseEvent(event)
+
+
+class KanbanColumn(QFrame):
+    """One status column on the Kanban board; accepts card drops."""
+    card_dropped = pyqtSignal(str, str)  # (issue_key, new_status)
+
+    def __init__(self, status: str, parent=None):
+        super().__init__(parent)
+        self._status = status
+        self.setAcceptDrops(True)
+        self.setMinimumWidth(240)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        color = STATUS_COLORS.get(status, TEXT_SEC)
+        self.setStyleSheet(f"""
+            KanbanColumn {{
+                background-color: {PANEL_BG};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
+            }}
+        """)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        # Header
+        hdr = QHBoxLayout()
+        self._hdr_lbl = QLabel(status.upper())
+        self._hdr_lbl.setStyleSheet(
+            f"color: {color}; font-size: 11px; font-weight: bold; letter-spacing: 1px;"
+        )
+        hdr.addWidget(self._hdr_lbl)
+        self._count_lbl = QLabel("0")
+        self._count_lbl.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 10px; background: {CARD_BG}; "
+            f"padding: 1px 6px; border-radius: 8px;"
+        )
+        hdr.addWidget(self._count_lbl)
+        hdr.addStretch()
+        outer.addLayout(hdr)
+
+        # Scrollable card area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self._card_container = QWidget()
+        self._card_container.setStyleSheet("background: transparent;")
+        self._cards_layout = QVBoxLayout(self._card_container)
+        self._cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._cards_layout.setSpacing(6)
+        self._cards_layout.addStretch()
+
+        scroll.setWidget(self._card_container)
+        outer.addWidget(scroll, 1)
+
+        self._cards: list[KanbanCard] = []
+        self._highlight = False
+
+    def add_card(self, card: KanbanCard):
+        self._cards.append(card)
+        # Insert before the stretch
+        self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+        self._count_lbl.setText(str(len(self._cards)))
+
+    def clear_cards(self):
+        for card in self._cards:
+            card.setParent(None)
+            card.deleteLater()
+        self._cards.clear()
+        self._count_lbl.setText("0")
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(KANBAN_MIME):
+            event.acceptProposedAction()
+            self._set_highlight(True)
+
+    def dragLeaveEvent(self, event):
+        self._set_highlight(False)
+
+    def dropEvent(self, event):
+        self._set_highlight(False)
+        if event.mimeData().hasFormat(KANBAN_MIME):
+            key = event.mimeData().data(KANBAN_MIME).data().decode()
+            event.acceptProposedAction()
+            self.card_dropped.emit(key, self._status)
+
+    def _set_highlight(self, on: bool):
+        color = ACCENT_BLUE if on else BORDER
+        self.setStyleSheet(f"""
+            KanbanColumn {{
+                background-color: {PANEL_BG};
+                border: 1px solid {color};
+                border-radius: 8px;
+            }}
+        """)
+
+
+class KanbanBoardWidget(QWidget):
+    """Full Kanban board: one column per status, drag-and-drop between them."""
+    story_selected = pyqtSignal(str)        # issue key clicked on card
+    transition_requested = pyqtSignal(str, str)  # (key, new_status_name)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._columns: dict[str, KanbanColumn] = {}
+        self._sp_field = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # Board header
+        hdr = QHBoxLayout()
+        title = QLabel("◈  KANBAN BOARD")
+        title.setObjectName("heading")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        self._status_lbl = QLabel("No stories loaded")
+        self._status_lbl.setObjectName("dim")
+        hdr.addWidget(self._status_lbl)
+        layout.addLayout(hdr)
+
+        # Columns row
+        cols_widget = QWidget()
+        cols_layout = QHBoxLayout(cols_widget)
+        cols_layout.setContentsMargins(0, 0, 0, 0)
+        cols_layout.setSpacing(10)
+
+        for status in KANBAN_STATUSES:
+            col = KanbanColumn(status)
+            col.card_dropped.connect(self._on_card_dropped)
+            self._columns[status] = col
+            cols_layout.addWidget(col, 1)
+
+        scroll = QScrollArea()
+        scroll.setWidget(cols_widget)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        layout.addWidget(scroll, 1)
+
+    def populate(self, issues: list, sp_field: str):
+        self._sp_field = sp_field
+        for col in self._columns.values():
+            col.clear_cards()
+
+        ungrouped = 0
+        for issue in issues:
+            status = (issue.get("fields", {}).get("status") or {}).get("name", "")
+            col = self._columns.get(status)
+            if col is None:
+                # Put unknown statuses in "To Do"
+                col = self._columns.get("To Do")
+                ungrouped += 1
+            if col:
+                card = KanbanCard(issue, sp_field)
+                card.clicked.connect(self.story_selected.emit)
+                col.add_card(card)
+
+        total = len(issues)
+        self._status_lbl.setText(
+            f"{total} stories across {len(KANBAN_STATUSES)} columns"
+            + (f" ({ungrouped} in unknown status → To Do)" if ungrouped else "")
+        )
+
+    def _on_card_dropped(self, key: str, new_status: str):
+        self.transition_requested.emit(key, new_status)
+
+
+# ── Backlog View ───────────────────────────────────────────────────────────────
+class BacklogWidget(QWidget):
+    """Shows stories not assigned to any sprint (backlog items)."""
+    story_selected = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._issues: list = []
+        self._sp_field     = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        hdr = QHBoxLayout()
+        title = QLabel("◈  BACKLOG")
+        title.setObjectName("heading")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        self._count_lbl = QLabel("")
+        self._count_lbl.setObjectName("dim")
+        hdr.addWidget(self._count_lbl)
+        layout.addLayout(hdr)
+
+        hint = QLabel(
+            "Stories not assigned to any sprint. "
+            "Select a project and board, then click  Load Backlog  to fetch."
+        )
+        hint.setObjectName("dim")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        # Filter bar
+        fb = QHBoxLayout()
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Filter backlog…")
+        self._search.setMaximumWidth(280)
+        self._search.textChanged.connect(self._filter)
+        fb.addWidget(self._search)
+        fb.addStretch()
+        layout.addLayout(fb)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(7)
+        self._table.setHorizontalHeaderLabels(
+            ["KEY", "SUMMARY", "ASSIGNEE", "PRIORITY", "PTS", "TYPE", "DUE DATE"]
+        )
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setShowGrid(False)
+        self._table.setSortingEnabled(True)
+        self._table.itemSelectionChanged.connect(self._on_selected)
+        layout.addWidget(self._table, 1)
+
+    def populate(self, issues: list, sp_field: str):
+        self._issues   = issues
+        self._sp_field = sp_field
+        self._table.setSortingEnabled(False)
+        self._table.setRowCount(0)
+        for iss in issues:
+            f       = iss.get("fields", {})
+            key     = iss.get("key", "")
+            summary = f.get("summary", "")
+            aobj    = f.get("assignee") or {}
+            assignee = aobj.get("displayName") or aobj.get("name") or "—"
+            priority = (f.get("priority") or {}).get("name", "—")
+            itype    = (f.get("issuetype") or {}).get("name", "—")
+            due      = (f.get("duedate") or "")[:10] or "—"
+            pts_raw  = next(
+                (f.get(k) for k in ([sp_field] + JiraClient._SP_FALLBACKS)
+                 if f.get(k) is not None), None
+            )
+            try:
+                pts = str(int(float(pts_raw))) if pts_raw is not None else "—"
+            except (TypeError, ValueError):
+                pts = "—"
+
+            row = self._table.rowCount()
+            self._table.insertRow(row)
+            k_item = QTableWidgetItem(key)
+            k_item.setForeground(QColor(ACCENT_CYAN))
+            self._table.setItem(row, 0, k_item)
+            self._table.setItem(row, 1, QTableWidgetItem(summary))
+            a_item = QTableWidgetItem(assignee)
+            a_item.setForeground(QColor(TEXT_SEC))
+            self._table.setItem(row, 2, a_item)
+            self._table.setItem(row, 3, QTableWidgetItem(priority))
+            pts_item = QTableWidgetItem(pts)
+            pts_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 4, pts_item)
+            self._table.setItem(row, 5, QTableWidgetItem(itype))
+            due_item = QTableWidgetItem(due)
+            due_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 6, due_item)
+            self._table.setRowHeight(row, 38)
+
+        self._table.setSortingEnabled(True)
+        self._count_lbl.setText(f"{len(issues)} backlog items")
+
+    def _filter(self, text: str):
+        term = text.lower()
+        for row in range(self._table.rowCount()):
+            match = not term or any(
+                term in (self._table.item(row, c).text().lower()
+                         if self._table.item(row, c) else "")
+                for c in range(self._table.columnCount())
+            )
+            self._table.setRowHidden(row, not match)
+
+    def _on_selected(self):
+        row = self._table.currentRow()
+        if row < 0:
+            return
+        item = self._table.item(row, 0)
+        if item:
+            self.story_selected.emit(item.text())
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -3165,7 +3713,7 @@ class MainWindow(QMainWindow):
         self._workers = []
         self._users_cache: list = []
         self._reselect_key: str | None = None
-        self._sp_field = "customfield_10016"
+        self._sp_field = JiraClient._FIELD_MAP[JiraClient.MODE_SECONDARY]["story_point"]
         self._fl_field = "customfield_10100"
 
         self._build_ui()
@@ -3228,6 +3776,23 @@ class MainWindow(QMainWindow):
         self.switch_instance_btn.setToolTip("Switch between Primary and Secondary without opening settings")
         self.switch_instance_btn.clicked.connect(self._switch_instance)
         tb_layout.addWidget(self.switch_instance_btn)
+
+        tb_layout.addSpacing(16)
+        self._tab_stories_btn = QPushButton("◈  Stories")
+        self._tab_stories_btn.setObjectName("toolbar_btn")
+        self._tab_stories_btn.setToolTip("Stories list view  (Alt+1)")
+        self._tab_stories_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
+        tb_layout.addWidget(self._tab_stories_btn)
+        self._tab_kanban_btn = QPushButton("⊞  Kanban")
+        self._tab_kanban_btn.setObjectName("toolbar_btn")
+        self._tab_kanban_btn.setToolTip("Kanban board view  (Alt+2)")
+        self._tab_kanban_btn.clicked.connect(lambda: self._switch_to_kanban())
+        tb_layout.addWidget(self._tab_kanban_btn)
+        self._tab_backlog_btn = QPushButton("☰  Backlog")
+        self._tab_backlog_btn.setObjectName("toolbar_btn")
+        self._tab_backlog_btn.setToolTip("Backlog view  (Alt+3)")
+        self._tab_backlog_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
+        tb_layout.addWidget(self._tab_backlog_btn)
 
         self.connect_btn = QPushButton("⚙  Configure")
         self.connect_btn.setObjectName("toolbar_btn")
@@ -3438,6 +4003,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.itemSelectionChanged.connect(self._on_story_selected)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         # ── Row right-click context menu ──────────────────────────────────────
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_row_context_menu)
@@ -3472,6 +4038,36 @@ class MainWindow(QMainWindow):
         splitter.setSizes([680, 480])
         stories_layout.addWidget(splitter, 1)
         self.tabs.addTab(stories_tab, "◈  STORIES")
+
+        # ── Kanban tab ────────────────────────────────────────────────────────
+        self.kanban_widget = KanbanBoardWidget()
+        self.kanban_widget.story_selected.connect(self._on_kanban_story_selected)
+        self.kanban_widget.transition_requested.connect(self._on_kanban_transition)
+        self.tabs.addTab(self.kanban_widget, "⊞  KANBAN")
+
+        # ── Backlog tab ───────────────────────────────────────────────────────
+        backlog_outer = QWidget()
+        backlog_outer_layout = QVBoxLayout(backlog_outer)
+        backlog_outer_layout.setContentsMargins(0, 0, 0, 0)
+        backlog_outer_layout.setSpacing(0)
+
+        # Toolbar for backlog tab
+        backlog_tb = QFrame()
+        backlog_tb.setStyleSheet(f"background: {PANEL_BG}; border-bottom: 1px solid {BORDER};")
+        btb_layout = QHBoxLayout(backlog_tb)
+        btb_layout.setContentsMargins(16, 6, 16, 6)
+        self.load_backlog_btn = QPushButton("↺  Load Backlog")
+        self.load_backlog_btn.setObjectName("toolbar_btn")
+        self.load_backlog_btn.setEnabled(False)
+        self.load_backlog_btn.clicked.connect(self._load_backlog)
+        btb_layout.addWidget(self.load_backlog_btn)
+        btb_layout.addStretch()
+        backlog_outer_layout.addWidget(backlog_tb)
+
+        self.backlog_widget = BacklogWidget()
+        self.backlog_widget.story_selected.connect(self._on_backlog_story_selected)
+        backlog_outer_layout.addWidget(self.backlog_widget, 1)
+        self.tabs.addTab(backlog_outer, "☰  BACKLOG")
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -3518,6 +4114,376 @@ class MainWindow(QMainWindow):
             self._copy_row_markdown
         )
 
+        # ── New keyboard shortcuts ────────────────────────────────────────────
+        # N — New story (when stories are loaded)
+        QShortcut(QKeySequence("N"), self.table).activated.connect(
+            lambda: self.new_story_btn.click() if self.new_story_btn.isEnabled() else None
+        )
+        # R — Refresh
+        QShortcut(QKeySequence("R"), self.table).activated.connect(
+            lambda: self.refresh_btn.click() if self.refresh_btn.isEnabled() else None
+        )
+        # S — Save (story edit panel)
+        QShortcut(QKeySequence("S"), self.table).activated.connect(
+            lambda: self.edit_panel.save_btn.click() if self.edit_panel.save_btn.isEnabled() else None
+        )
+        # Escape — clear table selection
+        QShortcut(QKeySequence("Escape"), self.table).activated.connect(
+            lambda: self.table.clearSelection()
+        )
+        # Delete — open archive picker for the selected row
+        QShortcut(QKeySequence("Delete"), self.table).activated.connect(
+            self._delete_selected_shortcut
+        )
+        # Arrow keys — navigate rows (Up/Down already work natively in QTableWidget;
+        # we add these as aliases for Ctrl+Up / Ctrl+Down when table has focus)
+        QShortcut(QKeySequence(Qt.Key.Key_Up), self.table).activated.connect(
+            lambda: self._navigate_story(-1)
+        )
+        QShortcut(QKeySequence(Qt.Key.Key_Down), self.table).activated.connect(
+            lambda: self._navigate_story(1)
+        )
+        # Alt+1/2/3 — switch tabs
+        QShortcut(QKeySequence("Alt+1"), self).activated.connect(
+            lambda: self.tabs.setCurrentIndex(0)
+        )
+        QShortcut(QKeySequence("Alt+2"), self).activated.connect(
+            lambda: self._switch_to_kanban()
+        )
+        QShortcut(QKeySequence("Alt+3"), self).activated.connect(
+            lambda: self.tabs.setCurrentIndex(2)
+        )
+
+    def _delete_selected_shortcut(self):
+        """Delete key: open the archive picker pre-selecting the current row."""
+        issue = self._selected_issue()
+        if not issue:
+            return
+        key = issue.get("key", "")
+        reply = QMessageBox.question(
+            self, "Archive Story",
+            f"Archive  {key}?\n\nArchived issues become read-only and are removed from boards.\n"
+            "They can be restored from Jira administration.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._busy(True)
+        self._status(f"Archiving {key}…")
+
+        def _do():
+            return self._client.archive_issues([key])
+
+        def _on_done(result):
+            self._busy(False)
+            errors = result.get("errors", []) if isinstance(result, dict) else []
+            if not errors:
+                self._status(f"✓ Archived {key}.")
+                self._issues = [i for i in self._issues if i.get("key") != key]
+                self._populate_table(self._issues)
+                self._update_velocity_bar()
+                self._populate_assignee_filter()
+                self.story_count_lbl.setText(f"{len(self._issues)} stories")
+            else:
+                QMessageBox.warning(self, "Archive Failed", "\n".join(str(e) for e in errors))
+                self._status("⚠ Archive had errors.")
+
+        self._spawn(_do, on_result=_on_done,
+                    on_error=lambda e: (self._busy(False),
+                                        self._status("✗ Archive failed."),
+                                        QMessageBox.critical(self, "Archive Failed", str(e))))
+
+    # ── Inline editing ────────────────────────────────────────────────────────
+    def _on_cell_double_clicked(self, row: int, col: int):
+        """Inline-edit story points (PTS col) or assignee (ASSIGNEE col) on double-click."""
+        key_item = self.table.item(row, COL_KEY)
+        if not key_item:
+            return
+        key = key_item.text()
+        issue = next((i for i in self._issues if i.get("key") == key), None)
+        if not issue:
+            return
+
+        if col == COL_STORY_PTS:
+            self._inline_edit_pts(row, key, issue)
+        elif col == COL_ASSIGNEE:
+            self._inline_edit_assignee(row, key, issue)
+
+    def _inline_edit_pts(self, row: int, key: str, issue: dict):
+        """Pop a combo in-line to change story points without opening the full edit panel."""
+        f = issue.get("fields", {})
+        pts_raw = next(
+            (f.get(k) for k in ([self._sp_field] + JiraClient._SP_FALLBACKS)
+             if f.get(k) is not None), None
+        )
+        try:
+            current_pts = int(float(pts_raw)) if pts_raw is not None else None
+        except (TypeError, ValueError):
+            current_pts = None
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Edit Story Points — {key}")
+        dlg.setFixedSize(280, 140)
+        dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        lbl = QLabel(f"Story points for  <b>{key}</b>:")
+        lbl.setStyleSheet(f"color: {TEXT_PRI};")
+        layout.addWidget(lbl)
+        combo = QComboBox()
+        combo.addItem("— Not set —", None)
+        for v in FIBONACCI:
+            label = str(v)
+            if v in (13, 21):
+                label += "  — consider splitting"
+            combo.addItem(label, v)
+        # Pre-select current value
+        for i in range(combo.count()):
+            if combo.itemData(i) == current_pts:
+                combo.setCurrentIndex(i)
+                break
+        layout.addWidget(combo)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_pts = combo.currentData()
+        sp = self._sp_field
+        fields_payload = {sp: new_pts}
+
+        self._busy(True)
+        self._status(f"Updating story points for {key}…")
+
+        def _do():
+            self._client.update_issue(key, fields_payload)
+
+        def _on_done(_):
+            self._busy(False)
+            pts_str = str(new_pts) if new_pts is not None else "—"
+            self._status(f"✓ {key} story points set to {pts_str}.")
+            # Update local cache
+            f = issue.get("fields", {})
+            f[sp] = new_pts
+            self._load_sprint_issues(reselect_key=key)
+
+        self._spawn(
+            _do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Failed to update {key} story points."),
+                QMessageBox.critical(self, "Update Failed", str(e)),
+            ),
+        )
+
+    def _inline_edit_assignee(self, row: int, key: str, issue: dict):
+        """Pop a combo in-line to reassign a story without opening the full edit panel."""
+        if not self._users_cache:
+            self._status("Loading users for inline edit…")
+            self._refresh_users_cache(on_done=lambda _: self._inline_edit_assignee(row, key, issue))
+            return
+
+        f = issue.get("fields", {})
+        aobj = f.get("assignee") or {}
+        current_uid = aobj.get("name") or aobj.get("accountId") or None
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Reassign — {key}")
+        dlg.setFixedSize(320, 150)
+        dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        lbl = QLabel(f"Assignee for  <b>{key}</b>:")
+        lbl.setStyleSheet(f"color: {TEXT_PRI};")
+        layout.addWidget(lbl)
+        combo = QComboBox()
+        combo.addItem("— Unassigned —", None)
+        for m in self._users_cache:
+            uid  = m.get("name") or m.get("accountId")
+            name = m.get("displayName", "?")
+            combo.addItem(name, uid)
+        for i in range(combo.count()):
+            if combo.itemData(i) == current_uid:
+                combo.setCurrentIndex(i)
+                break
+        layout.addWidget(combo)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Reassign")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_uid  = combo.currentData()
+        new_name = combo.currentText()
+        fields_payload = {"assignee": {"name": new_uid} if new_uid else None}
+
+        self._busy(True)
+        self._status(f"Reassigning {key}…")
+
+        def _do():
+            self._client.update_issue(key, fields_payload)
+
+        def _on_done(_):
+            self._busy(False)
+            self._status(f"✓ {key} assigned to {new_name}.")
+            self._load_sprint_issues(reselect_key=key)
+
+        self._spawn(
+            _do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Failed to reassign {key}."),
+                QMessageBox.critical(self, "Reassign Failed", str(e)),
+            ),
+        )
+
+    # ── Kanban helpers ────────────────────────────────────────────────────────
+    def _switch_to_kanban(self):
+        self.tabs.setCurrentIndex(1)
+        if self._issues:
+            self.kanban_widget.populate(self._issues, self._sp_field)
+
+    def _on_kanban_story_selected(self, key: str):
+        """When a Kanban card is clicked, switch to Stories tab and select that row."""
+        self.tabs.setCurrentIndex(0)
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item and item.text() == key:
+                self.table.selectRow(row)
+                self.table.scrollToItem(item)
+                break
+
+    def _on_kanban_transition(self, key: str, new_status_name: str):
+        """Card was dragged to a new column — find and apply the matching transition."""
+        if not self._client:
+            return
+        self._busy(True)
+        self._status(f"Transitioning {key} → {new_status_name}…")
+
+        def _do():
+            transitions = self._client.get_issue_transitions(key)
+            match = next(
+                (t for t in transitions
+                 if t.get("to", {}).get("name", "").lower() == new_status_name.lower()),
+                None,
+            )
+            if not match:
+                raise RuntimeError(
+                    f'No transition to "{new_status_name}" available for {key}.'
+                )
+            self._client.transition_issue(key, match["id"])
+
+        def _on_done(_):
+            self._busy(False)
+            self._status(f"✓ {key} → {new_status_name}")
+            # Refresh issues and repopulate Kanban
+            self._spawn(
+                self._client.get_sprint_issues,
+                self.board_combo.currentData(),
+                self.sprint_combo.currentData(),
+                on_result=lambda issues: (
+                    self._on_issues_loaded(issues),
+                    self.kanban_widget.populate(issues, self._sp_field),
+                ),
+            )
+
+        self._spawn(
+            _do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Transition failed: {e}"),
+                QMessageBox.warning(self, "Transition Failed", str(e)),
+                # Re-render Kanban to reset card positions
+                self.kanban_widget.populate(self._issues, self._sp_field),
+            ),
+        )
+
+    # ── Backlog helpers ───────────────────────────────────────────────────────
+    def _load_backlog(self):
+        """Fetch issues not in any sprint for the current project."""
+        project_key = self.project_combo.currentData()
+        if not project_key or not self._client:
+            return
+        self._busy(True)
+        self._status("Loading backlog…")
+
+        def _do():
+            sp   = self._sp_field
+            jql  = (
+                f'project = "{project_key}" '
+                f'AND sprint is EMPTY AND statusCategory != Done '
+                f'ORDER BY priority DESC, updated DESC'
+            )
+            encoded = urllib.parse.quote(jql)
+            fields  = ",".join([
+                "summary", "assignee", "status", "priority", "issuetype",
+                "duedate", sp, "comment",
+            ])
+            all_issues: list = []
+            start = 0
+            max_results = 100
+            while True:
+                url = (
+                    f"{self._client.base_url}/rest/api/{self._client.api_version}/search"
+                    f"?jql={encoded}&maxResults={max_results}&startAt={start}&fields={fields}"
+                )
+                req = urllib.request.Request(url, headers=self._client.headers)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
+                batch = data.get("issues", [])
+                all_issues.extend(batch)
+                if len(batch) < max_results:
+                    break
+                start += max_results
+            return all_issues
+
+        def _on_done(issues):
+            self._busy(False)
+            self._status(f"✓ Loaded {len(issues)} backlog items.")
+            self.backlog_widget.populate(issues, self._sp_field)
+
+        self._spawn(
+            _do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Failed to load backlog."),
+                QMessageBox.critical(self, "Backlog Load Failed", str(e)),
+            ),
+        )
+
+    def _on_backlog_story_selected(self, key: str):
+        """Load the selected backlog story into the edit panel on the Stories tab."""
+        # Try to find the issue in the sprint; if not there, we still select in the backlog
+        issue = next((i for i in self._issues if i.get("key") == key), None)
+        if issue:
+            self.tabs.setCurrentIndex(0)
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 0)
+                if item and item.text() == key:
+                    self.table.selectRow(row)
+                    self.table.scrollToItem(item)
+                    break
+
     def _selected_issue(self):
         row = self.table.currentRow()
         if row < 0:
@@ -3554,7 +4520,7 @@ class MainWindow(QMainWindow):
         issue_type   = (fields.get("issuetype") or {}).get("name", "")
         priority     = (fields.get("priority")  or {}).get("name", "")
 
-        pts_raw = fields.get(sp_field) or fields.get("customfield_10016")
+        pts_raw = next((fields.get(k) for k in ([sp_field] + JiraClient._SP_FALLBACKS) if fields.get(k) is not None), None)
         try:
             story_points = int(float(pts_raw)) if pts_raw is not None else ""
         except (TypeError, ValueError):
@@ -3619,7 +4585,7 @@ class MainWindow(QMainWindow):
         summary  = f.get("summary", "")
         assignee = (f.get("assignee") or {}).get("displayName", "—")
         status   = (f.get("status") or {}).get("name", "—")
-        pts_raw  = f.get(sp) or f.get("customfield_10016")
+        pts_raw  = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
         try:
             pts = str(int(float(pts_raw))) if pts_raw is not None else "—"
         except (TypeError, ValueError):
@@ -3638,6 +4604,16 @@ class MainWindow(QMainWindow):
             return
         key = key_item.text()
 
+        # Collect all selected keys (for bulk operations)
+        selected_rows = list({idx.row() for idx in self.table.selectedIndexes()})
+        selected_keys = []
+        for r in selected_rows:
+            ki = self.table.item(r, 0)
+            if ki:
+                selected_keys.append(ki.text())
+        if not selected_keys:
+            selected_keys = [key]
+
         menu = QMenu(self)
         open_action  = menu.addAction("⎋  Open in Jira")
         copy_key     = menu.addAction("⎘  Copy Key")
@@ -3647,6 +4623,18 @@ class MainWindow(QMainWindow):
         copy_md      = menu.addAction("⎘  Copy as Markdown")
         menu.addSeparator()
         duplicate    = menu.addAction("⧉  Duplicate Story")
+
+        # ── Bulk status transition (shown when ≥1 stories selected) ──────────
+        menu.addSeparator()
+        if len(selected_keys) > 1:
+            bulk_label = menu.addAction(f"⟳  Transition {len(selected_keys)} stories to…")
+            bulk_label.setEnabled(False)
+        else:
+            bulk_label = None
+        status_actions = {}
+        for status_name in ["To Do", "In Progress", "In Review", "Done", "Blocked"]:
+            act = menu.addAction(f"   → {status_name}")
+            status_actions[act] = status_name
 
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == open_action:
@@ -3666,6 +4654,66 @@ class MainWindow(QMainWindow):
             self._copy_row_markdown()
         elif chosen == duplicate:
             self._duplicate_story(key)
+        elif chosen in status_actions:
+            target_status = status_actions[chosen]
+            self._bulk_transition(selected_keys, target_status)
+
+    # ── Bulk status transition ────────────────────────────────────────────────
+    def _bulk_transition(self, keys: list, target_status_name: str):
+        """Transition multiple issues to the named status via available transitions."""
+        if not keys or not self._client:
+            return
+
+        n = len(keys)
+        self._busy(True)
+        self._status(f"Fetching transitions for {n} stor{'ies' if n != 1 else 'y'}…")
+
+        def _do_bulk():
+            results = {"ok": [], "failed": [], "no_transition": []}
+            for key in keys:
+                try:
+                    transitions = self._client.get_issue_transitions(key)
+                    match = next(
+                        (t for t in transitions
+                         if t.get("to", {}).get("name", "").lower() == target_status_name.lower()),
+                        None,
+                    )
+                    if not match:
+                        results["no_transition"].append(key)
+                        continue
+                    self._client.transition_issue(key, match["id"])
+                    results["ok"].append(key)
+                except Exception as e:
+                    results["failed"].append(f"{key}: {e}")
+            return results
+
+        def _on_done(results):
+            self._busy(False)
+            ok    = results["ok"]
+            fail  = results["failed"]
+            no_tr = results["no_transition"]
+            parts = [f'✓ {len(ok)} transitioned to "{target_status_name}".']
+            if no_tr:
+                parts.append(f'⚠ {len(no_tr)} had no "{target_status_name}" transition: {", ".join(no_tr)}')
+            if fail:
+                parts.append("✗ Failures:\n" + "\n".join(fail[:5]))
+            msg = "\n".join(parts)
+            if fail or no_tr:
+                QMessageBox.warning(self, "Bulk Transition", msg)
+            else:
+                self._status(msg.split("\n")[0])
+            if ok:
+                self._load_sprint_issues(reselect_key=ok[-1])
+
+        self._spawn(
+            _do_bulk,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Bulk transition failed."),
+                QMessageBox.critical(self, "Bulk Transition Failed", str(e)),
+            ),
+        )
 
     # ── Token storage ─────────────────────────────────────────────────────────
     @staticmethod
@@ -4143,6 +5191,10 @@ class MainWindow(QMainWindow):
         self.report_btn.setEnabled(True)
         self.archive_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
+        self.load_backlog_btn.setEnabled(True)
+        # Refresh Kanban if it is currently visible
+        if self.tabs.currentIndex() == 1:
+            self.kanban_widget.populate(issues, self._sp_field)
         reselect = self._reselect_key
         if reselect:
             for row in range(self.table.rowCount()):
@@ -4187,7 +5239,7 @@ class MainWindow(QMainWindow):
         for iss in self._issues:
             f = iss.get("fields", {})
             status = (f.get("status") or {}).get("name", "")
-            pts_raw = f.get(sp) or f.get("customfield_10016") or f.get("story_points")
+            pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
             try:
                 pts = int(float(pts_raw)) if pts_raw is not None else 0
             except (TypeError, ValueError):
@@ -4271,7 +5323,7 @@ class MainWindow(QMainWindow):
                     pass
             self.table.setItem(row, COL_DUE_DATE, due_item)
 
-            pts = f.get(sp_field) or f.get("customfield_10016") or f.get("story_points") or ""
+            pts = next((f.get(k) for k in ([sp_field] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None) or ""
             try:
                 pts_val = int(float(pts)) if pts else None
             except (TypeError, ValueError):
@@ -4408,7 +5460,7 @@ class MainWindow(QMainWindow):
                 issue_type = (fields.get("issuetype") or {}).get("name", "")
                 priority   = (fields.get("priority") or {}).get("name", "")
 
-                pts_raw = fields.get(sp_field) or fields.get("customfield_10016")
+                pts_raw = next((fields.get(k) for k in ([sp_field] + JiraClient._SP_FALLBACKS) if fields.get(k) is not None), None)
                 try:
                     story_points = int(float(pts_raw)) if pts_raw is not None else ""
                 except (TypeError, ValueError):
@@ -5014,8 +6066,8 @@ class MainWindow(QMainWindow):
         except RuntimeError as e:
             sp = self._client.story_point_field_id
             err_str = str(e)
-            if sp in err_str or "customfield_10016" in err_str:
-                fields_no_pts = {k: v for k, v in fields.items() if k not in (sp, "customfield_10016")}
+            if sp in err_str or any(f in err_str for f in JiraClient._SP_FALLBACKS):
+                fields_no_pts = {k: v for k, v in fields.items() if k not in ([sp] + JiraClient._SP_FALLBACKS)}
                 self._client.update_issue(key, fields_no_pts)
                 pts_dropped = True
             else:
@@ -5108,7 +6160,7 @@ class MainWindow(QMainWindow):
         summary   = f.get("summary", "") + " (copy)"
         issuetype = (f.get("issuetype") or {}).get("id")
         priority  = (f.get("priority") or {}).get("name", "")
-        pts_raw   = f.get(sp) or f.get("customfield_10016")
+        pts_raw   = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
         try: pts = int(float(pts_raw)) if pts_raw is not None else None
         except (TypeError, ValueError): pts = None
         aobj = f.get("assignee") or {}
@@ -5692,7 +6744,7 @@ class MainWindow(QMainWindow):
             else:
                 client = JiraClient(other_url, other_token, other_mode)
 
-            worker = _Worker(client.get_projects)
+            worker = Worker(client.get_projects)
             worker.result.connect(lambda r: _on_projects(r, inst))
             worker.error.connect(lambda e: status_lbl.setText(f"⚠ {e}"))
             worker.start()
