@@ -1,6 +1,6 @@
-# SprintMate  ◈  v2.15.1
+# SprintMate  ◈  v2.16.0
 
-A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files to issues, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint reports, all from one panel.
+A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files to issues, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint and people reports, all from one panel.
 
 ---
 
@@ -35,13 +35,13 @@ python sprintmate.py
 
 ## Configuration
 
-On first launch, click **⚙ Configure** in the top bar. SprintMate supports two Jira Data Center instances — **Primary** and **Secondary** — each configured independently.
+On first launch, click **⚙ Configure** in the top bar. SprintMate supports two Jira Data Center instances — **Primary** and **Secondary** — each configured independently. You can set a custom **Display Name** for each instance to replace the Primary/Secondary labels throughout the app.
 
 Use the **PRIMARY / SECONDARY** toggle at the top of the settings dialog to switch between them.
 
 | Field | Value |
 |---|---|
-| **Display Name** | Display name of instance, e.g. `Name 1` or `Name 2` |
+| **Display Name** | Optional. Replaces "Primary" / "Secondary" labels throughout the app (e.g. "Production", "Staging") |
 | **Jira URL** | Base URL of the instance, e.g. `https://jira.yourcompany.com` |
 | **PAT Token** | Personal Access Token generated in Jira → Profile → Personal Access Tokens |
 | **Token Expiry** | Optional expiry date — SprintMate will warn you when it is approaching |
@@ -101,7 +101,7 @@ The **▶ SAVE CHANGES** button is disabled until you make a change. Fields avai
 | **Description** | Full plain-text edit |
 | **Add Comment** | Optional comment posted to the story on save |
 
-The **RECENT COMMENTS** panel shows the five most recent comments on the selected story. Each entry displays the author's name, the date, and a truncated preview of the body in the format `[2026-06-10] Jane Smith: Comment text…`. Click **⤢ Expand** to view a comment in full. Use **✎ Edit** or **✕ Delete** to modify or remove a posted comment (see below).
+The **RECENT COMMENTS** panel shows the five most recent comments on the selected story. Each entry displays the author's name, the date, and a truncated preview in the format `[2026-06-10] Jane Smith: Comment text…`. Click **⤢ Expand** to view a comment in full. Use **✎ Edit** or **✕ Delete** to modify or remove a posted comment (see below).
 
 The edit panel header includes five controls:
 
@@ -182,8 +182,8 @@ Progress is shown per-comment in the progress bar. Any failures are reported in 
 
 Click **⎘ Clone** in the edit panel header (visible when a story is selected) to open the clone dialog. The dialog has three sections:
 
-- **Target Instance** — defaults to the current instance. If the other instance (Primary or Secondary) has saved credentials, it appears as a second option. Projects are fetched lazily when you switch instances.
-- **Target Project** — a searchable dropdown populated from the selected instance's project list, sorted alphabetically.
+- **Target Instance** — defaults to the current instance. If the other instance has saved credentials, it appears as a second option. Projects are fetched lazily when you switch instances.
+- **Target Project** — a dropdown populated from the selected instance's project list, sorted alphabetically.
 - **Fields to clone** — Summary (pre-filled as `[Clone] Original summary`), Description, and Assignee, all editable before committing.
 
 Click **⎘ Clone** to create the issue. On success, a dialog shows the new issue key with **Copy Key** and **Open in Jira** action buttons.
@@ -194,9 +194,9 @@ Click **📎 Attach File** in the edit panel header (visible when a story is sel
 
 ### Archiving stories
 
-Click **🗄 Archive** in the filter toolbar (enabled once stories are loaded) to archive one or more stories. A searchable picker dialog lists all stories in the sprint with checkboxes; select the ones to archive and click **🗄 Archive Selected**. A confirmation dialog explains the consequences before anything is sent.
+Click **🗄 Archive** in the filter toolbar (enabled once stories are loaded) to archive one or more stories. A searchable, sortable picker dialog lists all stories in the sprint with columns for KEY, SUMMARY, ASSIGNEE, and STATUS. Check the stories to archive and click **🗄 Archive Selected**. A confirmation dialog explains the consequences before anything is sent.
 
-Archiving calls `POST /rest/api/2/issue/archive` (requires Jira Data Center 8.1 or later). Archived issues become read-only and are removed from boards, backlogs, and search results. All data is preserved in the database and issues can be restored from Jira administration.
+Archiving calls `POST /rest/api/2/issue/archive` (requires Jira Data Center 8.1 or later). Archived issues become read-only and are removed from boards, backlogs, and search results. All data is preserved and issues can be restored from Jira administration. Archived stories are removed from the sprint view immediately without waiting for a Jira index refresh.
 
 ### Editing and deleting comments
 
@@ -209,14 +209,24 @@ Both actions reload the story immediately so the comment panel reflects the chan
 
 ### Generating a sprint report
 
-Click **📊 Sprint Report** in the filter bar (enabled once stories are loaded) to generate an HTML report for the current sprint. The report includes:
+Click **📊 Sprint Report** in the filter toolbar (enabled once stories are loaded) to open the report dialog. The dialog has two tabs.
 
-- **Stat cards** — total stories, done count, total points, done points, and velocity percentage with a visual progress bar.
-- **Status breakdown** — story count and percentage per status, with colour-coded badges.
-- **By assignee** — per-person story count, done count, total and done points, and a visual progress bar.
-- **All stories** — a full table with key (hyperlinked to Jira when a URL is configured), summary, assignee, status, priority, story points, due date, and issue type. Overdue due dates are highlighted in red; dates within 3 days are highlighted in amber.
+**Sprint Report tab** — choose a scope then click **▶ Generate Sprint Report**:
 
-The report renders inline in a dialog and can be saved as an HTML file via **⬇ Save as HTML**.
+- **Sprint** — select any sprint from the dropdown (pre-selected to the currently loaded sprint) and generate a report for that sprint's issues.
+- **Date Range** — enter From and To dates in `YYYY-MM-DD` format to fetch all issues updated within that window via JQL.
+
+The report includes stat cards (total stories, done count, total/done points, velocity %), a status breakdown table, a per-assignee summary with progress bars, and a full story table with keys hyperlinked to Jira. Overdue due dates are highlighted in red; dates within 3 days are highlighted in amber.
+
+**People Report tab** — generate an instance-wide report filtered by person:
+
+- **Scope** — choose a sprint or a date range, same as above.
+- **People** — multi-select from the list of assignees on the current sprint, and/or type additional usernames (comma-separated) in the free-text box.
+- Click **▶ Generate People Report** to fetch and render the report.
+
+The People Report shows a summary comparison table at the top (stories, done, story progress, total points, done points, points progress, average cycle time in days, status breakdown per person), followed by a per-person detail section with their full issue table.
+
+Both reports can be saved as HTML via **⬇ Save as HTML**.
 
 ### Exporting stories
 
@@ -364,9 +374,9 @@ The suggested filename is auto-generated from the current project, board, sprint
 
 1. Load the sprint containing the stories you want to archive.
 2. Click **🗄 Archive** in the filter toolbar.
-3. Use the search box to find stories if needed, then tick the checkboxes next to each story to archive.
+3. Use the search box to find stories if needed. Click any column header to sort. Tick the checkboxes next to each story to archive.
 4. Click **🗄 Archive Selected** and confirm the prompt.
-5. The sprint view refreshes automatically. Archived stories are removed from boards and search results but can be restored from Jira administration.
+5. Archived stories are removed from the sprint view immediately and from boards and search results in Jira. They can be restored from Jira administration.
 
 > Archiving requires Jira Data Center 8.1 or later.
 
@@ -377,7 +387,7 @@ The suggested filename is auto-generated from the current project, board, sprint
 1. Click the story whose comment you want to change.
 2. In the **RECENT COMMENTS** panel, click **✎ Edit** or **✕ Delete**.
 3. If the story has more than one comment, a picker dialog appears — select the comment you want to act on.
-4. **Edit** — modify the text in the editor and click **Save Comment**.  
+4. **Edit** — modify the text in the editor and click **Save Comment**.
    **Delete** — review the preview in the confirmation dialog and click **Yes** to permanently remove it.
 5. The story reloads automatically so the comment panel reflects the change.
 
@@ -387,10 +397,30 @@ The suggested filename is auto-generated from the current project, board, sprint
 
 ### How to generate a sprint report
 
-1. Load the sprint you want to report on.
-2. Click **📊 Sprint Report** in the filter bar.
-3. The report dialog opens with stat cards, a status breakdown, a per-assignee summary, and a full story table.
-4. Optionally click **⬇ Save as HTML** to save the report to a file — the suggested filename includes the sprint name and today's date.
+1. Load a sprint and click **📊 Sprint Report** in the filter toolbar.
+2. On the **Sprint Report** tab, select a scope — choose a sprint from the dropdown or switch to Date Range and enter From/To dates.
+3. Click **▶ Generate Sprint Report**. The report renders inline with stat cards, status breakdown, assignee summary, and a full story table.
+4. Optionally click **⬇ Save as HTML** to save the report to a file.
+
+---
+
+### How to generate a people report
+
+1. Load a sprint and click **📊 Sprint Report** in the filter toolbar.
+2. Switch to the **👤 People Report** tab.
+3. Select a **scope** — a specific sprint or a date range.
+4. **Select people** from the list (populated from the current sprint's assignees) and/or type additional usernames in the free-text box.
+5. Click **▶ Generate People Report**. The report renders a summary comparison table followed by a per-person detail section.
+6. Optionally click **⬇ Save as HTML** to save the report to a file.
+
+---
+
+### How to set a custom instance display name
+
+1. Click **⚙ Configure** in the top bar.
+2. Select the instance you want to rename using the **PRIMARY / SECONDARY** toggle.
+3. Enter a name in the **Display Name** field (e.g. "Production", "Staging", "Dev").
+4. Click **Save**. The name replaces "Primary" / "Secondary" everywhere in the app — the top bar indicator, Switch Instance status, sprint load status, and the clone dialog instance selector. Leave it blank to revert to the default label.
 
 ---
 
