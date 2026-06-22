@@ -1,4 +1,10 @@
 # SprintMate Changelog
+## [2.16.1] — 2026-06-22
+### Bug Fixes
+* **Fixed story points mismatch between the left panel and edit panel.** The `_FIELD_MAP` correctly maps `customfield_10006` (Primary) and `customfield_10106` (Secondary) as the story point field IDs per instance, but eleven places throughout the code fell back to the hardcoded `customfield_10016` when the detected field returned no value. On instances where `customfield_10016` holds a different or stale value, the left panel and edit panel would read from different fields and show different numbers. Fixed by adding `JiraClient._SP_FALLBACKS` — an ordered list of all known story point field IDs across Jira DC configurations — and replacing all hardcoded `or f.get("customfield_10016")` fallback chains with a consistent `next(...)` expression that walks `_SP_FALLBACKS` in order, always trying the detected field first. Also added `JiraClient.get_story_points(fields)` as a reusable helper for the same logic. The default `_sp_field` initialisation was updated from the hardcoded `"customfield_10016"` to `JiraClient._FIELD_MAP[MODE_SECONDARY]["story_point"]` so the default is always in sync with the field map. The save error handler was also updated to exclude all known SP fields when retrying a save without story points, not just `customfield_10016`.
+
+---
+
 ## [2.16.0] — 2026-06-22
 ### Features
 * **Sprint Report tab now supports filtering by sprint or date range.** The Sprint Report tab has been refactored to match the People Report tab pattern. A SCOPE control group replaces the static title — choose a sprint from the dropdown (pre-selected to the currently loaded sprint) or switch to Date Range and enter From/To dates in `YYYY-MM-DD` format. Clicking **▶ Generate Sprint Report** fetches the relevant issues and renders the report. The **⬇ Save as HTML** button is disabled until the first successful generate. Sprint scope calls `get_sprint_issues(board_id, sprint_id)`; date range scope builds a JQL query with `updated >=` / `updated <=` bounds and fetches via the search API with pagination.
