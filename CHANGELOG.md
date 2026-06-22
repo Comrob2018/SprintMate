@@ -1,4 +1,22 @@
 # SprintMate Changelog
+## [2.18.0] — 2026-06-22
+### Features
+* **Kanban board persists between tab switches.** `KanbanBoardWidget.populate()` now skips a full re-render when the issues list identity and sp_field are unchanged. Switching away from Kanban and back no longer rebuilds all cards. A `refresh(force=True)` call is used after drag-and-drop transitions to force an update only when the data has actually changed.
+* **Burndown chart uses real sprint dates.** `_open_sprint_report` now calls `JiraClient.get_sprint_detail(sprint_id)` (a new `GET /rest/agile/1.0/sprint/{id}` endpoint) to fetch the sprint's `startDate` and `endDate`, and passes them to `SprintReportDialog` as `sprint_detail`. The burndown chart now derives its x-axis from the real sprint calendar rather than a fixed 14-day estimate. The footnote shows the actual sprint date range. Falls back to the estimate-based approach if dates are unavailable.
+* **Inline status editing.** Double-clicking the **STATUS** cell in the story table opens a combo populated with the issue's available Jira transitions. Selecting one and clicking **Apply** transitions the issue immediately and reloads the sprint.
+* **Inline due date editing.** Double-clicking the **DUE DATE** cell opens a calendar date-picker. Clicking **Save** updates the due date; clicking **Clear Date** removes it entirely.
+* **New Story button on Kanban board.** The Kanban board header now includes a **＋ New Story** button that delegates to the Stories toolbar's New Story flow.
+* **Backlog: Move to Sprint.** The Backlog view now includes a sprint selector and a **⇧ Move** button. Select one or more backlog stories, choose a target sprint, and click Move. The active sprint is pre-selected. Moved stories are removed from the backlog table immediately.
+* **Backlog: Export CSV.** An **⬇ Export CSV** button in the Backlog toolbar exports all loaded backlog items (key, summary, assignee, priority, story points, issue type, due date) to a CSV file.
+* **Velocity history chart.** A new **📈 Velocity** button in the Stories toolbar opens a velocity history dialog. It fetches up to N recent closed sprints (configurable 3–10), computes committed vs completed points per sprint from the actual sprint issues, and renders an SVG bar chart. A summary table and **⬇ Export CSV** button are included.
+* **Story ranking.** Two **↑ Rank Up** / **↓ Rank Down** buttons appear in the quick-add bar below the stories table. Clicking either calls `PUT /rest/agile/1.0/issue/rank` with `rankBeforeIssue` or `rankAfterIssue` to re-order the selected story within the sprint. If the board's ranking field is not writable, a clear error message explains why instead of silently failing.
+* **Kanban transition fuzzy name matching.** Dragging a card to a new column now uses a four-tier matching strategy: (1) exact target-status name, (2) starts-with, (3) contains, (4) transition name match. This handles boards where Jira workflows use non-standard transition names (e.g. "Start Progress" instead of naming the target "In Progress"). If no match is found, the error message lists all available transitions.
+* **Backlog JQL fallback.** `_load_backlog` now tries `sprint is EMPTY` first and automatically falls back to `sprint not in openSprints() AND sprint not in closedSprints()` if the first form is rejected by the server. Both errors are surfaced if both forms fail.
+* **Retry button on failed background operations.** The default error handler in `_spawn` now opens a dialog with a **↩ Retry** button when `retry_fn` is provided. Callers that pass `retry_fn` get one-click retry without re-navigating. The button is omitted when no retry function is available, preserving the previous behaviour.
+* **Sprint comparison CSV export.** After a sprint comparison completes, SprintMate offers to export the diff as a CSV (key, change_type, diffs). The change types are `added`, `changed`, and `removed`. The dialog appears automatically after the compare finishes; the export can also be triggered via the prompt.
+
+---
+
 ## [2.17.0] — 2026-06-22
 ### Features
 * **Bulk status transitions.** Right-click one or more selected rows to reveal a "Transition N stories to…" submenu with all five canonical statuses. Each story's available transitions are fetched individually, the matching transition is applied, and a summary reports successes, failures, and any stories that had no matching transition available.
