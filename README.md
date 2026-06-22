@@ -110,6 +110,7 @@ The edit panel header includes four controls:
 | **⎘** | Copies the current issue key to the clipboard |
 | **⎋ Open in Jira** | Opens the current story in your browser |
 | **📎 Attach File** | Opens a file picker to attach one or more files to the current story |
+| ** Clone Issue ** | Clone an issue to another board, project, or instance |
 
 Click **▶ SAVE CHANGES** (or press `Ctrl+S`) — the app updates Jira and re-selects the saved story automatically.
 
