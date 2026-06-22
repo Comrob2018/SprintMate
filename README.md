@@ -1,6 +1,6 @@
-# SprintMate  ◈  v2.15.1
+# SprintMate  ◈  v2.15.0
 
-A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files to issues, archive stories, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint reports, all from one panel.
+A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files to issues, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, and generate sprint reports, all from one panel.
 
 ---
 
@@ -41,7 +41,6 @@ Use the **PRIMARY / SECONDARY** toggle at the top of the settings dialog to swit
 
 | Field | Value |
 |---|---|
-| **Display Name** | Display Name for the instance, e.g. `Sentinel` or `ACyD` |
 | **Jira URL** | Base URL of the instance, e.g. `https://jira.yourcompany.com` |
 | **PAT Token** | Personal Access Token generated in Jira → Profile → Personal Access Tokens |
 | **Token Expiry** | Optional expiry date — SprintMate will warn you when it is approaching |
@@ -103,14 +102,14 @@ The **▶ SAVE CHANGES** button is disabled until you make a change. Fields avai
 
 The **RECENT COMMENTS** panel shows the five most recent comments on the selected story. Each entry displays the author's name, the date, and a truncated preview of the body in the format `[2026-06-10] Jane Smith: Comment text…`. Click **⤢ Expand** to view a comment in full. Use **✎ Edit** or **✕ Delete** to modify or remove a posted comment (see below).
 
-The edit panel header includes four controls:
+The edit panel header includes five controls:
 
 | Control | Action |
 |---|---|
 | **⎘** | Copies the current issue key to the clipboard |
 | **⎋ Open in Jira** | Opens the current story in your browser |
+| **⎘ Clone** | Clone this story to a project or instance |
 | **📎 Attach File** | Opens a file picker to attach one or more files to the current story |
-| **Clone Issue** | Clone an issue to another board, project, or instance |
 
 Click **▶ SAVE CHANGES** (or press `Ctrl+S`) — the app updates Jira and re-selects the saved story automatically.
 
@@ -177,6 +176,16 @@ A preview dialog shows all parsed entries with their match status before anythin
 - **Cross-post** — if a story with the same summary and assignee is found on the other instance, the comment is posted there too. Cross-post targets are highlighted in cyan in the preview. Cross-posting uses fuzzy JQL summary matching and falls back to exact match if the contains search returns nothing.
 
 Progress is shown per-comment in the progress bar. Any failures are reported in the status bar at completion without aborting the rest of the batch.
+
+### Cloning a story
+
+Click **⎘ Clone** in the edit panel header (visible when a story is selected) to open the clone dialog. The dialog has three sections:
+
+- **Target Instance** — defaults to the current instance. If the other instance (Primary or Secondary) has saved credentials, it appears as a second option. Projects are fetched lazily when you switch instances.
+- **Target Project** — a searchable dropdown populated from the selected instance's project list, sorted alphabetically.
+- **Fields to clone** — Summary (pre-filled as `[Clone] Original summary`), Description, and Assignee, all editable before committing.
+
+Click **⎘ Clone** to create the issue. On success, a dialog shows the new issue key with **Copy Key** and **Open in Jira** action buttons.
 
 ### Attaching files to a story
 
@@ -327,6 +336,17 @@ The suggested filename is auto-generated from the current project, board, sprint
 3. Click **📄 Import** (or press `Ctrl+I`) and select your file.
 4. Review the preview dialog. **Matched** entries (key found in the current sprint) are ready to post. **Unmatched** entries are skipped. Any entries that also match a story on the other instance are highlighted in cyan as cross-post targets.
 5. Click **OK** to post. Progress is shown per comment; any failures are reported in the status bar without stopping the rest of the batch.
+
+---
+
+### How to clone a story
+
+1. Load a sprint and click the story you want to clone.
+2. Click **⎘ Clone** in the edit panel header.
+3. Select a **target instance** — the current instance is selected by default. If the other instance has saved credentials, it appears as a second option.
+4. Select a **target project** from the dropdown — projects are loaded from the selected instance automatically.
+5. Review and edit the **Summary**, **Description**, and **Assignee** fields as needed.
+6. Click **⎘ Clone**. On success, a dialog shows the new issue key with options to **Copy Key** or **Open in Jira**.
 
 ---
 
