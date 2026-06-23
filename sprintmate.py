@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.18.0"
+APP_VERSION  = "2.19.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -495,6 +495,52 @@ class JiraClient:
                 return json.loads(resp.read().decode())
         except Exception:
             return {}
+
+    def create_sprint(self, board_id: int, name: str,
+                      start_date: str = "", end_date: str = "",
+                      goal: str = "") -> dict:
+        """Create a new sprint on the given board.
+
+        Dates should be ISO-8601 with timezone, e.g. '2026-06-23T09:00:00.000Z'.
+        Returns the created sprint dict (includes 'id').
+        """
+        body: dict = {"name": name, "originBoardId": board_id}
+        if start_date:
+            body["startDate"] = start_date
+        if end_date:
+            body["endDate"] = end_date
+        if goal:
+            body["goal"] = goal
+        url  = f"{self.base_url}/rest/agile/1.0/sprint"
+        data = json.dumps(body).encode()
+        req  = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} creating sprint: {e.read().decode(errors='replace')}")
+
+    def update_sprint(self, sprint_id: int, **fields) -> dict:
+        """Update sprint fields (name, state, startDate, endDate, goal, completeDate).
+
+        Pass state='active' to start, state='closed' to close.
+        Uses POST (Jira DC standard); falls back to PUT if POST returns 405.
+        """
+        body = {k: v for k, v in fields.items() if v is not None}
+        url  = f"{self.base_url}/rest/agile/1.0/sprint/{sprint_id}"
+        data = json.dumps(body).encode()
+        for method in ("POST", "PUT"):
+            req = urllib.request.Request(url, data=data, headers=self.headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return json.loads(resp.read().decode()) if resp.length else {}
+            except urllib.error.HTTPError as e:
+                if e.code == 405 and method == "POST":
+                    continue   # try PUT
+                raise RuntimeError(
+                    f"HTTP {e.code} updating sprint {sprint_id}: {e.read().decode(errors='replace')}"
+                )
+        return {}
 
     def rank_issue(self, issue_key: str, rank_before_key: str = "", rank_after_key: str = "") -> None:
         """Re-rank an issue relative to another. Uses the Agile API rank endpoint."""
@@ -1754,6 +1800,10 @@ class StoryEditPanel(QFrame):
         self.clone_btn.setToolTip("Clone this story to a project or instance")
         self.clone_btn.setFixedHeight(28)
         self.clone_btn.setEnabled(False)
+        self.attach_btn = QPushButton("📎  Attach File")
+        self.attach_btn.setToolTip("Upload one or more files as attachments to this issue")
+        self.attach_btn.setFixedHeight(28)
+        self.attach_btn.setEnabled(False)
         hdr.addWidget(self.title_lbl, 1)
         hdr.addWidget(self.key_lbl)
         hdr.addWidget(self.copy_key_btn)
@@ -3367,6 +3417,364 @@ class SprintReportDialog(QDialog):
             QMessageBox.critical(self, "Save Failed", str(e))
 
 
+# ── Sprint Manager Dialog ─────────────────────────────────────────────────────
+class SprintManagerDialog(QDialog):
+    """Create a new sprint, or start / close / rename the active sprint."""
+
+    sprint_changed = pyqtSignal()   # emitted after any successful operation
+
+    def __init__(self, board_id: int, board_name: str, sprints: list,
+                 client, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sprint Manager")
+        self.setMinimumSize(520, 480)
+        self.setStyleSheet(parent.styleSheet() if parent else "")
+
+        self._board_id   = board_id
+        self._board_name = board_name
+        self._sprints    = sprints
+        self._client     = client
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(12)
+
+        heading = QLabel(f"◈  SPRINT MANAGER  —  {board_name}")
+        heading.setObjectName("heading")
+        layout.addWidget(heading)
+
+        tabs = QTabWidget()
+        layout.addWidget(tabs, 1)
+
+        # ── Tab 1: Create Sprint ──────────────────────────────────────────────
+        create_tab = QWidget()
+        cl = QVBoxLayout(create_tab)
+        cl.setContentsMargins(16, 16, 16, 16)
+        cl.setSpacing(10)
+
+        cf = QFormLayout()
+        cf.setSpacing(10)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("e.g. Sprint 43")
+        cf.addRow("Sprint Name *:", self._name_edit)
+
+        self._goal_edit = QLineEdit()
+        self._goal_edit.setPlaceholderText("Optional sprint goal")
+        cf.addRow("Goal:", self._goal_edit)
+
+        self._start_edit = QDateEdit()
+        self._start_edit.setCalendarPopup(True)
+        self._start_edit.setDisplayFormat("yyyy-MM-dd")
+        self._start_edit.setDate(QDate.currentDate())
+        cf.addRow("Start Date:", self._start_edit)
+
+        self._end_edit = QDateEdit()
+        self._end_edit.setCalendarPopup(True)
+        self._end_edit.setDisplayFormat("yyyy-MM-dd")
+        self._end_edit.setDate(QDate.currentDate().addDays(14))
+        cf.addRow("End Date:", self._end_edit)
+
+        self._start_now_cb = QRadioButton("Create and immediately start this sprint")
+        self._create_only_cb = QRadioButton("Create as future sprint (start later)")
+        self._create_only_cb.setChecked(True)
+        cf.addRow("", self._start_now_cb)
+        cf.addRow("", self._create_only_cb)
+
+        cl.addLayout(cf)
+
+        self._create_status = QLabel("")
+        self._create_status.setObjectName("dim")
+        self._create_status.setWordWrap(True)
+        cl.addWidget(self._create_status)
+        cl.addStretch()
+
+        self._create_btn = QPushButton("＋  Create Sprint")
+        self._create_btn.setObjectName("save_btn")
+        self._create_btn.clicked.connect(self._do_create)
+        cl.addWidget(self._create_btn)
+
+        tabs.addTab(create_tab, "＋  Create")
+
+        # ── Tab 2: Manage Existing Sprint ────────────────────────────────────
+        manage_tab = QWidget()
+        ml = QVBoxLayout(manage_tab)
+        ml.setContentsMargins(16, 16, 16, 16)
+        ml.setSpacing(10)
+
+        sf = QFormLayout()
+        sf.setSpacing(10)
+
+        self._sprint_combo = QComboBox()
+        for s in sprints:
+            state = s.get("state", "")
+            self._sprint_combo.addItem(f"[{state.upper()}]  {s['name']}", s["id"])
+        self._sprint_combo.currentIndexChanged.connect(self._on_sprint_selected)
+        sf.addRow("Sprint:", self._sprint_combo)
+
+        self._edit_name = QLineEdit()
+        sf.addRow("Rename to:", self._edit_name)
+
+        self._edit_goal = QLineEdit()
+        self._edit_goal.setPlaceholderText("Optional")
+        sf.addRow("Goal:", self._edit_goal)
+
+        self._edit_start = QDateEdit()
+        self._edit_start.setCalendarPopup(True)
+        self._edit_start.setDisplayFormat("yyyy-MM-dd")
+        sf.addRow("Start Date:", self._edit_start)
+
+        self._edit_end = QDateEdit()
+        self._edit_end.setCalendarPopup(True)
+        self._edit_end.setDisplayFormat("yyyy-MM-dd")
+        sf.addRow("End Date:", self._edit_end)
+
+        ml.addLayout(sf)
+
+        self._manage_status = QLabel("")
+        self._manage_status.setObjectName("dim")
+        self._manage_status.setWordWrap(True)
+        ml.addWidget(self._manage_status)
+        ml.addStretch()
+
+        action_row = QHBoxLayout()
+        self._save_btn = QPushButton("💾  Save Changes")
+        self._save_btn.setObjectName("save_btn")
+        self._save_btn.clicked.connect(self._do_save)
+        action_row.addWidget(self._save_btn)
+        action_row.addStretch()
+        self._start_btn = QPushButton("▶  Start Sprint")
+        self._start_btn.setObjectName("toolbar_btn")
+        self._start_btn.clicked.connect(self._do_start)
+        action_row.addWidget(self._start_btn)
+        self._close_btn = QPushButton("■  Close Sprint")
+        self._close_btn.setObjectName("danger")
+        self._close_btn.clicked.connect(self._do_close)
+        action_row.addWidget(self._close_btn)
+        ml.addLayout(action_row)
+
+        tabs.addTab(manage_tab, "⚙  Manage")
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        done_btn = QPushButton("Done")
+        done_btn.clicked.connect(self.accept)
+        close_row.addWidget(done_btn)
+        layout.addLayout(close_row)
+
+        # Populate manage tab with first sprint
+        if sprints:
+            self._on_sprint_selected(0)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _selected_sprint(self) -> dict:
+        idx = self._sprint_combo.currentIndex()
+        if idx < 0 or idx >= len(self._sprints):
+            return {}
+        return self._sprints[idx]
+
+    def _on_sprint_selected(self, idx: int):
+        s = self._selected_sprint()
+        if not s:
+            return
+        self._edit_name.setText(s.get("name", ""))
+        self._edit_goal.setText(s.get("goal", "") or "")
+
+        def _parse_date(val):
+            raw = (val or "")[:10]
+            try:
+                d = date.fromisoformat(raw)
+                return QDate(d.year, d.month, d.day)
+            except ValueError:
+                return QDate.currentDate()
+
+        self._edit_start.setDate(_parse_date(s.get("startDate")))
+        self._edit_end.setDate(_parse_date(s.get("endDate")))
+
+        state = s.get("state", "").lower()
+        self._start_btn.setEnabled(state == "future")
+        self._close_btn.setEnabled(state == "active")
+        self._save_btn.setEnabled(True)
+
+    def _to_iso(self, qdate: QDate, time_suffix: str = "T09:00:00.000Z") -> str:
+        return qdate.toString("yyyy-MM-dd") + time_suffix
+
+    # ── Create ────────────────────────────────────────────────────────────────
+    def _do_create(self):
+        name = self._name_edit.text().strip()
+        if not name:
+            self._create_status.setText("⚠ Sprint name is required.")
+            return
+        start = self._to_iso(self._start_edit.date())
+        end   = self._to_iso(self._end_edit.date(), "T17:00:00.000Z")
+        goal  = self._goal_edit.text().strip()
+        start_now = self._start_now_cb.isChecked()
+
+        self._create_btn.setEnabled(False)
+        self._create_status.setText("Creating sprint…")
+
+        class _W(QThread):
+            result = pyqtSignal(object)
+            error  = pyqtSignal(str)
+            def __init__(self, fn, *a):
+                super().__init__()
+                self._fn, self._a = fn, a
+            def run(self):
+                try:    self.result.emit(self._fn(*self._a))
+                except Exception as e: self.error.emit(str(e))
+
+        def _on_done(sprint):
+            sid  = sprint.get("id")
+            sname = sprint.get("name", name)
+            if start_now and sid:
+                try:
+                    self._client.update_sprint(sid, state="active",
+                                               startDate=start, endDate=end)
+                    self._create_status.setText(f'✓ Sprint "{sname}" created and started.')
+                except Exception as e:
+                    self._create_status.setText(
+                        f'✓ Sprint "{sname}" created (id {sid}), '
+                        f'but could not start it: {e}'
+                    )
+            else:
+                self._create_status.setText(f'✓ Sprint "{sname}" created (id {sid}).')
+            self._create_btn.setEnabled(True)
+            self._name_edit.clear()
+            self._goal_edit.clear()
+            self.sprint_changed.emit()
+
+        def _on_err(e):
+            self._create_status.setText(f"✗ {e}")
+            self._create_btn.setEnabled(True)
+
+        w = _W(self._client.create_sprint, self._board_id, name, start, end, goal)
+        w.result.connect(_on_done)
+        w.error.connect(_on_err)
+        w.start()
+        self._w_create = w
+
+    # ── Save (rename / update dates / goal) ───────────────────────────────────
+    def _do_save(self):
+        s = self._selected_sprint()
+        if not s:
+            return
+        sid   = s["id"]
+        name  = self._edit_name.text().strip() or s.get("name", "")
+        goal  = self._edit_goal.text().strip()
+        start = self._to_iso(self._edit_start.date())
+        end   = self._to_iso(self._edit_end.date(), "T17:00:00.000Z")
+
+        self._save_btn.setEnabled(False)
+        self._manage_status.setText("Saving…")
+
+        self._run_manage(
+            self._client.update_sprint, sid,
+            name=name, goal=goal, startDate=start, endDate=end,
+            on_ok=lambda _: (
+                self._manage_status.setText(f"✓ Sprint updated."),
+                self._save_btn.setEnabled(True),
+                self.sprint_changed.emit(),
+            ),
+            on_err=lambda e: (
+                self._manage_status.setText(f"✗ {e}"),
+                self._save_btn.setEnabled(True),
+            ),
+        )
+
+    # ── Start ─────────────────────────────────────────────────────────────────
+    def _do_start(self):
+        s = self._selected_sprint()
+        if not s:
+            return
+        sid   = s["id"]
+        start = self._to_iso(self._edit_start.date())
+        end   = self._to_iso(self._edit_end.date(), "T17:00:00.000Z")
+
+        reply = QMessageBox.question(
+            self, "Start Sprint",
+            f'Start sprint  "{s["name"]}"?\n\n'
+            f'Start: {self._edit_start.date().toString("yyyy-MM-dd")}\n'
+            f'End:   {self._edit_end.date().toString("yyyy-MM-dd")}\n\n'
+            "Only one sprint can be active at a time. "
+            "If another sprint is already active this will fail.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._start_btn.setEnabled(False)
+        self._manage_status.setText("Starting sprint…")
+        self._run_manage(
+            self._client.update_sprint, sid,
+            state="active", startDate=start, endDate=end,
+            on_ok=lambda _: (
+                self._manage_status.setText(f'✓ Sprint "{s["name"]}" is now active.'),
+                self._start_btn.setEnabled(False),
+                self._close_btn.setEnabled(True),
+                self.sprint_changed.emit(),
+            ),
+            on_err=lambda e: (
+                self._manage_status.setText(f"✗ {e}"),
+                self._start_btn.setEnabled(True),
+            ),
+        )
+
+    # ── Close ─────────────────────────────────────────────────────────────────
+    def _do_close(self):
+        s = self._selected_sprint()
+        if not s:
+            return
+        sid = s["id"]
+
+        reply = QMessageBox.question(
+            self, "Close Sprint",
+            f'Close sprint  "{s["name"]}"?\n\n'
+            "Incomplete stories will remain on the board and can be moved "
+            "to a future sprint. This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._close_btn.setEnabled(False)
+        self._manage_status.setText("Closing sprint…")
+        complete = self._to_iso(QDate.currentDate(), "T17:00:00.000Z")
+        self._run_manage(
+            self._client.update_sprint, sid,
+            state="closed", completeDate=complete,
+            on_ok=lambda _: (
+                self._manage_status.setText(f'✓ Sprint "{s["name"]}" closed.'),
+                self._close_btn.setEnabled(False),
+                self._start_btn.setEnabled(False),
+                self.sprint_changed.emit(),
+            ),
+            on_err=lambda e: (
+                self._manage_status.setText(f"✗ {e}"),
+                self._close_btn.setEnabled(True),
+            ),
+        )
+
+    # ── Thread runner ─────────────────────────────────────────────────────────
+    def _run_manage(self, fn, *args, on_ok, on_err, **kwargs):
+        class _W(QThread):
+            result = pyqtSignal(object)
+            error  = pyqtSignal(str)
+            def __init__(self, fn, *a, **kw):
+                super().__init__()
+                self._fn, self._a, self._kw = fn, a, kw
+            def run(self):
+                try:    self.result.emit(self._fn(*self._a, **self._kw))
+                except Exception as e: self.error.emit(str(e))
+
+        w = _W(fn, *args, **kwargs)
+        w.result.connect(on_ok)
+        w.error.connect(on_err)
+        w.start()
+        self._w_manage = w   # keep alive
+
+
 # ── Velocity History Dialog ───────────────────────────────────────────────────
 class VelocityHistoryDialog(QDialog):
     """Shows a bar chart of points committed vs completed across recent closed sprints."""
@@ -4313,6 +4721,13 @@ class MainWindow(QMainWindow):
         self.compare_btn.setEnabled(False)
         self.compare_btn.clicked.connect(self._compare_sprints)
         fb_row1.addWidget(self.compare_btn)
+        fb_row1.addSpacing(12)
+        self.sprint_mgr_btn = QPushButton("⊕  Sprint")
+        self.sprint_mgr_btn.setObjectName("toolbar_btn")
+        self.sprint_mgr_btn.setToolTip("Create, start, rename, or close sprints")
+        self.sprint_mgr_btn.setEnabled(False)
+        self.sprint_mgr_btn.clicked.connect(self._open_sprint_manager)
+        fb_row1.addWidget(self.sprint_mgr_btn)
         fb_row1.addStretch()
         fb_outer.addLayout(fb_row1)
 
@@ -4932,6 +5347,35 @@ class MainWindow(QMainWindow):
             ),
         )
 
+    # ── Sprint manager ────────────────────────────────────────────────────────
+    def _open_sprint_manager(self):
+        board_id   = self.board_combo.currentData()
+        board_name = self.board_combo.currentText()
+        if not board_id or not self._client:
+            return
+        dlg = SprintManagerDialog(
+            board_id   = board_id,
+            board_name = board_name,
+            sprints    = list(self._sprints),
+            client     = self._client,
+            parent     = self,
+        )
+        dlg.sprint_changed.connect(self._on_sprint_manager_changed)
+        dlg.exec()
+
+    def _on_sprint_manager_changed(self):
+        """Reload the sprint list after any create/start/close operation."""
+        bid = self.board_combo.currentData()
+        if not bid or not self._client:
+            return
+        self._busy(True)
+        self._status("Reloading sprints…")
+        self._spawn(
+            self._client.get_sprints, bid,
+            on_result=self._on_sprints_loaded,
+            on_error=lambda e: (self._busy(False), self._status(f"⚠ {e}")),
+        )
+
     # ── Velocity history ──────────────────────────────────────────────────────
     def _open_velocity_history(self):
         board_id = self.board_combo.currentData()
@@ -5485,6 +5929,7 @@ class MainWindow(QMainWindow):
         self.compare_combo.setEnabled(False)
         self.compare_combo.clear()
         self.compare_btn.setEnabled(False)
+        self.sprint_mgr_btn.setEnabled(False)
         self.assignee_filter_combo.setEnabled(False)
         self.assignee_filter_combo.clear()
         self.edit_panel.current_key = None
@@ -5854,6 +6299,7 @@ class MainWindow(QMainWindow):
             self.compare_combo.addItem(f"[{s.get('state','').upper()}] {s['name']}", s['id'])
         self.compare_combo.setEnabled(True)
         self.compare_btn.setEnabled(True)
+        self.sprint_mgr_btn.setEnabled(True)
         bid = self.board_combo.currentData()
         if bid:
             last_sid = QSettings("SprintMate","SprintMate").value(f"last_sprint_{bid}")
