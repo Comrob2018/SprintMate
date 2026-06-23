@@ -1,4 +1,15 @@
 # SprintMate Changelog
+## [2.19.0] — 2026-06-22
+### Features
+* **Sprint management — create, start, rename, and close sprints.** A new **⊕ Sprint** button appears in the filter toolbar once a board is loaded. Clicking it opens the Sprint Manager dialog, which has two tabs.
+  * **＋ Create** — enter a name (required), optional goal, start date, and end date, then choose whether to create the sprint as a future sprint or create-and-start it immediately. Status messages appear inline without a separate popup.
+  * **⚙ Manage** — a dropdown lists every sprint on the board. Selecting one pre-fills its current name, goal, and dates. Three action buttons are available: **💾 Save Changes** (rename, reschedule, update goal), **▶ Start Sprint** (confirms dates and warns that only one sprint can be active at a time), and **■ Close Sprint** (confirms that incomplete stories stay on the board). Start and Close are only enabled when the selected sprint is in the correct state (future / active respectively).
+  * After any successful operation the sprint dropdown in the main window reloads automatically.
+* **`JiraClient.create_sprint`** — calls `POST /rest/agile/1.0/sprint` with name, originBoardId, startDate, endDate, and optional goal. Returns the full created sprint dict including its `id`.
+* **`JiraClient.update_sprint`** — calls `POST /rest/agile/1.0/sprint/{id}` and automatically falls back to `PUT` on HTTP 405 (some older DC instances require PUT). Accepts any combination of name, state, startDate, endDate, goal, and completeDate. Passing `state="active"` starts the sprint; `state="closed"` closes it.
+
+---
+ 
 ## [2.18.0] — 2026-06-22
 ### Features
 * **Kanban board persists between tab switches.** `KanbanBoardWidget.populate()` now skips a full re-render when the issues list identity and sp_field are unchanged. Switching away from Kanban and back no longer rebuilds all cards. A `refresh(force=True)` call is used after drag-and-drop transitions to force an update only when the data has actually changed.
