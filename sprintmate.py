@@ -7757,6 +7757,7 @@ class MainWindow(QMainWindow):
                 ("Alt+1",        "Switch to Stories view"),
                 ("Alt+2",        "Switch to Active Sprint board"),
                 ("Alt+3",        "Switch to Backlog view"),
+                ("Alt+4",        "Switch to Reports tab"),
                 ("?",            "Show this shortcut reference"),
             ]),
             ("Table (when focused)", [
