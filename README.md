@@ -1,6 +1,6 @@
-# SprintMate  ◈  v2.21.1
+# SprintMate  ◈  v2.23.0
 
-A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, generate sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
+A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
 ---
 
@@ -285,7 +285,43 @@ Click **📈 Velocity** in the Stories toolbar (enabled once stories are loaded)
 
 The dialog shows a bar chart with paired bars per sprint (committed in blue, completed in green), a summary table, and a **⬇ Export CSV** button. Use the **Sprints to show** dropdown (3–10) to control how many sprints are included, then click **▶ Load** to refresh.
 
-### Comparing sprints
+### Sprint progress bar
+
+A 4px coloured bar sits directly below the story count row, visible whenever a sprint is loaded. It reflects the percentage of story points completed:
+
+- **Green** — 80% or more done
+- **Amber** — 40–79% done  
+- **Red** — under 40% done
+
+Hovering the bar shows "X of Y pts done (Z%) · N of M stories done". The bar hides when the sprint view is cleared.
+
+### Column persistence
+
+Visible column preferences are saved per board. Once you toggle columns on or off for a board, SprintMate remembers them and restores the same layout the next time you load stories from that board. Right-click any column header to change which columns are visible.
+
+### Bulk editing stories
+
+Click **✎ Bulk Edit** in the Stories toolbar (enabled when stories are loaded) to edit multiple stories at once. Select the stories you want to change first (hold `Shift` or `Ctrl` to multi-select), then click Bulk Edit. The dialog has three fields — Assignee, Priority, and Story Points — all defaulting to "No change". Only fields you explicitly set are updated. A summary reports successes and failures per story.
+
+### Story hover preview
+
+Hovering over the KEY or SUMMARY cell of any story row shows a tooltip with the description excerpt (up to 140 characters) and the most recent comment with the author's name. This lets you check context without clicking into the full edit panel.
+
+### Recent stories
+
+A **🕐** button in the quick-add bar below the story table opens a popup menu of the last 10 story keys you viewed, with their summaries. Clicking any entry scrolls the table to that story and selects it. A "Clear history" item at the bottom resets the list.
+
+### Duplicate detection
+
+When typing in the quick-add bar, SprintMate checks whether a similar story already exists in the sprint before creating it. If more than 60% of the words in the summary match an existing story, a dialog lists the matches and asks you to confirm before proceeding.
+
+### Story links panel
+
+When a story has Jira issue links (blocks / is blocked by / relates to), a read-only **LINKED ISSUES** panel appears in the edit panel below the comments section. It shows the relationship type, linked issue key, status, and a summary excerpt. The panel is hidden when there are no links.
+
+### Keyboard shortcut reference
+
+Click the **?** button in the toolbar or press `?` anywhere in the app to open the keyboard shortcut reference card. It lists all shortcuts grouped into Global, Table (when focused), and Inline editing sections.
 
 Select a sprint in the **Compare** dropdown in the filter toolbar and click **Compare**. SprintMate highlights rows that have changed (blue background) or are new since the comparison sprint (green background). Hovering the KEY cell shows a tooltip with a summary of what changed (status, assignee, story points).
 
@@ -312,6 +348,8 @@ After any successful operation the sprint dropdown in the main window reloads au
 ### Kanban board
 
 Click **⊞ Active Sprint** in the top bar (or press `Alt+2`) to switch to the active sprint board view. The board heading and tab label both reflect the loaded sprint name (e.g. `⊞  Sprint 42`). They reset to `⊞  ACTIVE SPRINT` when no sprint is loaded.
+
+**Loading from the Kanban tab** — if no stories are loaded yet, a compact load toolbar appears at the top of the board with PROJECT, BOARD, and SPRINT dropdowns and a **↺ Load** button. The dropdowns are pre-filled to match whatever is selected on the Stories tab. Select a sprint and click **↺ Load** to populate the board directly, without switching to the Stories tab first. The toolbar auto-hides once stories are loaded.
 
 Stories are displayed as cards in five columns: **To Do**, **In Progress**, **In Review**, **Done**, and **Blocked**. Each card shows the issue key, summary, assignee, and story points. The left border colour corresponds to the story's status.
 
@@ -385,6 +423,7 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | `Alt+1` | Switch to Stories view |
 | `Alt+2` | Switch to Active Sprint board view |
 | `Alt+3` | Switch to Backlog view |
+| `?` | Open keyboard shortcut reference card |
 
 ### Table (when the story table has focus)
 
@@ -412,6 +451,8 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | **⊞ Active Sprint** | Switch to the active sprint board view |
 | **☰ Backlog** | Switch to the Backlog view |
 | **⊕ Sprint** | Open the Sprint Manager (create, start, rename, close) |
+| **✎ Bulk Edit** | Bulk-edit assignee, priority, or story points for selected stories |
+| **?** | Open the keyboard shortcut reference card |
 
 ---
 
@@ -487,15 +528,37 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 
 ---
 
-### How to use the active sprint board
+### How to bulk-edit multiple stories
 
 1. Load a sprint.
-2. Click **⊞ Active Sprint** in the top bar (or press `Alt+2`). The tab and board heading show the sprint name.
-3. Stories appear as cards in their current status column.
+2. Select the stories to edit — click the first row, then `Shift`+click or `Ctrl`+click additional rows.
+3. Click **✎ Bulk Edit** in the toolbar.
+4. Set any combination of Assignee, Priority, or Story Points. Fields left at "No change" are untouched.
+5. Click **Apply to All**. A summary reports how many were updated and any failures.
+
+---
+
+### How to use the active sprint board
+
+1. Click **⊞ Active Sprint** in the top bar (or press `Alt+2`).
+2. If no stories are loaded, a load toolbar appears. Select a project, board, and sprint, then click **↺ Load**. If stories are already loaded from the Stories tab, the board populates immediately.
+3. The tab and board heading show the sprint name.
 4. **Filter cards** using the filter bar: type in the search box to match by key or summary, choose an assignee, or choose a priority. All three filters work together in real time. Click **✕ Clear** to reset.
 5. **Drag a card** to a new column to trigger a Jira status transition.
 6. **Click a card** to jump back to the Stories tab with that story selected.
 7. Use **＋ New Story** in the board header to create a story without leaving the board.
+
+---
+
+### How to view recently visited stories
+
+Click the **🕐** button in the quick-add bar below the story table. A popup menu shows the last 10 stories you viewed with their summaries. Click any entry to jump to it. Click "Clear history" to reset the list.
+
+---
+
+### How to open the keyboard shortcut reference
+
+Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrollable dialog lists all shortcuts grouped into Global, Table, and Inline editing sections.
 
 ---
 
