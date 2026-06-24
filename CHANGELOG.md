@@ -1,4 +1,20 @@
 # SprintMate Changelog
+## [2.20.0] — 2026-06-23
+### Features
+* **Kanban filter bar.** A filter bar now sits below the board header with three controls that work together in real time — no button press required.
+  * **Text search** — filters cards by issue key or summary substring.
+  * **Assignee** — a combo populated automatically from the loaded issues. Signals are blocked during rebuild so a filter pass isn't triggered mid-load. The selected assignee is preserved across sprint reloads if the same person is still present.
+  * **Priority** — Highest / High / Medium / Low / Lowest.
+  * A **✕ Clear** button resets all three at once (blocking all signals during the reset to avoid redundant render passes).
+  * A "Showing N of M" label appears in the bar whenever any filter is active and disappears when all filters are cleared.
+* **Kanban board title and tab label reflect the active sprint.** The board heading (previously the static text "◈  KANBAN BOARD") now displays the loaded sprint name in uppercase (e.g. `◈  SPRINT 42`). The tab label updates to match (e.g. `⊞  Sprint 42`). Both reset to `◈  ACTIVE SPRINT` / `⊞  ACTIVE SPRINT` when the sprint view is cleared. The top-bar navigation button was also renamed from "⊞ Kanban" to "⊞ Active Sprint".
+* **Backlog right-click context menu with Open in Jira.** Right-clicking any row in the Backlog table now opens a context menu. Menu items adapt for single vs multi-selection.
+  * **⎋ Open in Jira** — opens the issue in the browser. Only enabled for single-row selection; disabled when no base URL is available.
+  * **⎘ Copy Key / Copy N Keys** — copies the key (or a comma-separated list of keys) to the clipboard.
+  * **⇧ Move to Sprint / Move N Stories to Sprint** — moves the selected stories to whichever sprint is chosen in the Move to Sprint dropdown. Disabled if no sprint is selected. This duplicates the toolbar Move button for convenience when right-clicking.
+
+---
+ 
 ## [2.19.0] — 2026-06-22
 ### Features
 * **Sprint management — create, start, rename, and close sprints.** A new **⊕ Sprint** button appears in the filter toolbar once a board is loaded. Clicking it opens the Sprint Manager dialog, which has two tabs.
