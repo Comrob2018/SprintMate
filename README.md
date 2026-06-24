@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.23.0
+# SprintMate  ◈  v2.23.1
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -737,6 +737,7 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 - The app targets **Jira Data Center** exclusively and uses the **REST API v2** and the **Agile API v1.0** for boards, sprints, and ranking.
 - All API calls run on background threads — the UI stays responsive during loads. A maximum of 5 background operations can run concurrently. Failed operations show a **↩ Retry** button in the error dialog where supported.
 - Settings (URLs, default project/board, token expiry, project/board filters) are stored via `QSettings` (registry on Windows, `~/.config` on Linux, `~/Library/Preferences` on macOS). PAT tokens are stored in the OS keychain when `keyring` is available.
+- **Recent stories history** and **per-board column visibility preferences** are also persisted to `QSettings` and restored on the next launch. Both are saved automatically when the app closes cleanly.
 - On first save with `keyring` present, any token previously stored as base64 in QSettings is automatically migrated to the keychain and the legacy entry is removed.
 - The Kanban board persists between tab switches and only rebuilds cards when the sprint data actually changes.
 - The burndown chart uses the sprint's real `startDate` and `endDate` from Jira when available. If the sprint has no dates set (e.g. it hasn't been started formally), the chart falls back to a 14-day estimate based on the proportion of points completed.
