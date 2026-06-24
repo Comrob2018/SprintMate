@@ -1,4 +1,27 @@
 # SprintMate Changelog
+## [2.23.0] — 2026-06-23
+### Features
+* **Kanban board load toolbar.** The Active Sprint board now shows a compact load toolbar at the top when no stories are loaded, instead of just showing an empty board. The toolbar contains PROJECT, BOARD, and SPRINT dropdowns and a **↺ Load** button, with a hint label reading "Select a sprint and click Load to populate the board."
+  * `sync_combos()` mirrors the Stories tab's three selectors into the Kanban toolbar whenever sprints finish loading and whenever the user switches to the Kanban tab, so if a sprint is already selected on the Stories tab the toolbar is pre-filled automatically.
+  * Clicking **↺ Load** calls `_on_kanban_load_requested`, which syncs the selected values back to the Stories tab combos (without triggering cascade signals) and then fires the same load path as the Stories tab Load button. Both views end up in sync.
+  * The toolbar auto-hides once `populate()` is called with stories, and reappears when `clear()` is called (board change, instance switch, sprint clear).
+
+---
+ 
+## [2.22.0] — 2026-06-23
+### Features
+* **Sprint progress bar.** A 4px coloured bar sits below the story count row, always visible when a sprint is loaded. It fills green (≥80% of points done), amber (40–79%), or red (<40%). Hovering shows "X of Y pts done (Z%) · N of M stories done". Hides and resets to zero on sprint clear.
+* **Column persistence.** Visible column preferences are now saved per board ID in `_column_prefs`. `_show_column_menu` saves the current visible set after every toggle. `_populate_table` restores saved prefs for the current board on load instead of always resetting to defaults.
+* **Bulk edit dialog.** A **✎ Bulk Edit** button in the Stories toolbar (enabled when stories are loaded) opens a dialog with three independent fields: Assignee, Priority, and Story Points — all defaulting to "No change". Only fields explicitly set are updated. Results summarise successes and failures per story; the sprint reloads after.
+* **Unsaved changes indicator.** `StoryEditPanel` now emits a `changed` signal the first time any field is modified. `_mark_unsaved_row` appends ` ●` to the KEY cell of the currently edited row and turns it amber. Selecting a different row clears the previous row's indicator. Saving also clears it.
+* **Story detail preview on hover.** `_populate_table` now builds a rich tooltip for both the KEY and SUMMARY cells: the description excerpt (up to 140 chars, ADF-flattened) and the most recent comment with author name.
+* **Recent stories sidebar.** A **🕐** button in the quick-add bar opens a popup menu of the last 10 viewed issue keys with their summaries. Selecting one scrolls the table to that row. A "Clear history" item resets the list. The MRU list is updated on every row selection.
+* **Duplicate detection on quick-add.** Before creating a story via the quick-add bar, `_check_quick_add_duplicate` computes word-overlap between the typed summary and every existing sprint story. If >60% of words match, a "Possible Duplicate" dialog lists the matches and asks for confirmation.
+* **Story links panel.** A read-only "LINKED ISSUES" panel is now shown in the edit panel when the selected story has Jira issue links (blocks / is blocked by / relates to). The panel shows the relationship type, linked key, status, and summary excerpt. It is hidden when there are no links. `issuelinks` is now included in the sprint issues fetch.
+* **Keyboard shortcut reference card.** A **?** button in the toolbar and the `?` key open a scrollable reference dialog listing all shortcuts grouped into three sections: Global, Table (when focused), and Inline editing. Each entry shows a monospace key badge and description.
+
+---
+
 ## [2.21.1] — 2026-06-23
 ### Bug Fixes
 * **Quick-add issue type selection.** The quick-add bar previously always created issues using the first type returned by Jira (`types[0]`), with no way for the user to choose. A type combo is now placed to the right of the summary field. It is populated from the same issue type list as the edit panel when a project loads, with "Story" pre-selected if present, otherwise the first available type. The status message during creation now reflects the chosen type (e.g. "Creating Bug…"). The combo is disabled and cleared when the sprint view resets. A fallback to the edit panel's first type is retained if the combo is somehow empty.
