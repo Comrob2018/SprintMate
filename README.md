@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.25.0
+# SprintMate  ◈  v2.25.1
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -260,8 +260,8 @@ The Reports toolbar contains:
 | Control | Action |
 |---|---|
 | **SPRINT** dropdown | Select which sprint to report on (pre-filled with all board sprints; active sprint pre-selected) |
-| **📊 Sprint Report** | Generate the full dashboard-style sprint report |
-| **👤 People Report** | Generate a per-person breakdown using the current sprint's assignees |
+| **📊 Sprint Report** | Switch to Sprint Report sub-tab (select sprint or date range, then click ▶ Generate) |
+| **👤 People Report** | Switch to People Report sub-tab (select sprint or date range, choose people, then click ▶ Generate) |
 | **📈 Velocity** | Generate the velocity history bar chart and table |
 | **📉 Burndown** | Generate a standalone burndown chart for the active sprint |
 | **COMPARE** dropdown + **⇆ Compare** | Compare the loaded sprint against another sprint |
@@ -269,9 +269,9 @@ The Reports toolbar contains:
 
 Each button switches to its own sub-tab and generates into it. Sub-tabs persist their content — switching between them does not lose a generated report. The **⬇ Save HTML** button always saves whichever sub-tab is currently visible.
 
-**📊 Sprint Report** — full dashboard HTML with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a proportional status stacked bar, a team card grid with per-person progress bars, and a story table with sticky headers, status badges, and overdue row highlighting.
+**📊 Sprint Report** — each sub-tab has its own scope bar. Choose **Sprint** to select any sprint from the dropdown, or **Date Range** and enter From / To dates. Click **▶ Generate** to run the report. The report itself is a full dashboard HTML with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a proportional status stacked bar, a team card grid with per-person progress bars, and a story table with sticky headers, status badges, and overdue row highlighting.
 
-**👤 People Report** — per-assignee summary table (stories, done, story progress, total points, done points, points progress, status breakdown) followed by a per-person detail section. Uses all assignees from the currently loaded sprint.
+**👤 People Report** — the sub-tab scope bar offers **Sprint** or **Date Range** selection, a multi-select people list (populated from the sprint's assignees, all selected by default), and an extra usernames field for people not in the current sprint. Click **▶ Generate**. The report shows a per-assignee summary table (stories, done, story progress, total points, done points, points progress, status breakdown) followed by a per-person detail section.
 
 **📈 Velocity** — a native SVG bar chart (committed vs completed per sprint, scales with the window) above a summary table of the last 8 closed sprints. Requires `PyQt6-Qt6-Svg` for the chart; the table is always available.
 
@@ -687,9 +687,10 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 ### How to generate a sprint report
 
 1. Click **📊 Reports** in the top bar (or press `Alt+4`).
-2. Select a sprint from the **SPRINT** dropdown.
-3. Click **📊 Sprint Report**. The report renders inline with a dark header, stat cards, burndown chart, status stacked bar, team card grid, and full story table.
-4. Click **⬇ Save HTML** to save the report to a file. The exported HTML includes print CSS for clean printing or PDF export from the browser.
+2. Click **📊 Sprint Report** or switch to the **📊 Sprint Report** sub-tab.
+3. In the scope bar, choose **Sprint** and select a sprint from the dropdown, or choose **Date Range** and enter From / To dates.
+4. Click **▶ Generate**. The report renders inline with a dark header, stat cards, burndown chart, status stacked bar, team card grid, and full story table.
+5. Click **⬇ Save HTML** to save the report to a file. The exported HTML includes print CSS for clean printing or PDF export from the browser.
 
 ---
 
@@ -705,8 +706,11 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 ### How to generate a people report
 
 1. Click **📊 Reports** in the top bar (or press `Alt+4`).
-2. Click **👤 People Report**. The report uses all assignees from the currently loaded sprint.
-3. Click **⬇ Save HTML** to save to a file.
+2. Click **👤 People Report** or switch to the **👤 People Report** sub-tab.
+3. Choose **Sprint** or **Date Range** in the scope bar and select the scope.
+4. In the People list, select the team members to include (all are selected by default). Add extra usernames in the free-text field if needed.
+5. Click **▶ Generate**.
+6. Click **⬇ Save HTML** to save to a file.
 
 ---
 
