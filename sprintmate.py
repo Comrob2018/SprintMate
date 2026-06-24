@@ -17,7 +17,6 @@ import urllib.parse
 import urllib.error
 from datetime import date
 
-
 try:
     import keyring
     import keyring.errors
@@ -99,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.23.1"
+APP_VERSION  = "2.24.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -5138,11 +5137,11 @@ class MainWindow(QMainWindow):
         self._tab_backlog_btn.setToolTip("Backlog view  (Alt+3)")
         self._tab_backlog_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
         tb_layout.addWidget(self._tab_backlog_btn)
-
-        self.connect_btn = QPushButton("⚙  Configure")
-        self.connect_btn.setObjectName("toolbar_btn")
-        self.connect_btn.clicked.connect(self._open_settings)
-        tb_layout.addWidget(self.connect_btn)
+        self._tab_reports_btn = QPushButton("📊  Reports")
+        self._tab_reports_btn.setObjectName("toolbar_btn")
+        self._tab_reports_btn.setToolTip("Reports  (Alt+4)")
+        self._tab_reports_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(3))
+        tb_layout.addWidget(self._tab_reports_btn)
 
         self.refresh_btn = QPushButton("↺  Refresh")
         self.refresh_btn.setObjectName("toolbar_btn")
@@ -5153,7 +5152,15 @@ class MainWindow(QMainWindow):
         root.addWidget(topbar)
 
         # ── Help menu ────────────────────────────────────────────────────
-        _help_menu = self.menuBar().addMenu("Help")
+        _help_menu = self.menuBar().addMenu("Menu")
+        _cfg_act = QAction("⚙  Configure…", self)
+        _cfg_act.triggered.connect(self._open_settings)
+        _help_menu.addAction(_cfg_act)
+        _help_menu.addSeparator()
+        _shortcuts_act = QAction("Keyboard Shortcuts…", self)
+        _shortcuts_act.triggered.connect(self._show_shortcut_dialog)
+        _help_menu.addAction(_shortcuts_act)
+        _help_menu.addSeparator()
         _upd_act = QAction("Check for Updates…", self)
         _upd_act.triggered.connect(self._check_for_updates)
         _help_menu.addAction(_upd_act)
@@ -5229,18 +5236,6 @@ class MainWindow(QMainWindow):
         self.load_btn.setEnabled(False)
         fb_row1.addWidget(self.load_btn)
         fb_row1.addSpacing(12)
-        fb_row1.addWidget(QLabel("COMPARE"))
-        self.compare_combo = QComboBox()
-        self.compare_combo.setMinimumWidth(180)
-        self.compare_combo.setEnabled(False)
-        self.compare_combo.setToolTip("Select a sprint to compare against the loaded sprint")
-        fb_row1.addWidget(self.compare_combo)
-        self.compare_btn = QPushButton("⇆  Compare")
-        self.compare_btn.setObjectName("toolbar_btn")
-        self.compare_btn.setEnabled(False)
-        self.compare_btn.clicked.connect(self._compare_sprints)
-        fb_row1.addWidget(self.compare_btn)
-        fb_row1.addSpacing(12)
         self.sprint_mgr_btn = QPushButton("⊕  Sprint")
         self.sprint_mgr_btn.setObjectName("toolbar_btn")
         self.sprint_mgr_btn.setToolTip("Create, start, rename, or close sprints")
@@ -5274,18 +5269,8 @@ class MainWindow(QMainWindow):
         self.export_btn.clicked.connect(self._export_stories)
         self.export_btn.setEnabled(False)
         fb_row2.addWidget(self.export_btn)
-        self.report_btn = QPushButton("📊  Sprint Report")
-        self.report_btn.setObjectName("toolbar_btn")
-        self.report_btn.setToolTip("Generate an HTML report for the current sprint")
-        self.report_btn.clicked.connect(self._open_sprint_report)
-        self.report_btn.setEnabled(False)
-        fb_row2.addWidget(self.report_btn)
-        self.velocity_btn = QPushButton("📈  Velocity")
-        self.velocity_btn.setObjectName("toolbar_btn")
-        self.velocity_btn.setToolTip("Show velocity history across recent sprints")
-        self.velocity_btn.clicked.connect(self._open_velocity_history)
-        self.velocity_btn.setEnabled(False)
-        fb_row2.addWidget(self.velocity_btn)
+        self.report_btn    = None   # moved to Reports tab
+        self.velocity_btn  = None   # moved to Reports tab
         self.archive_btn = QPushButton("🗄  Archive")
         self.archive_btn.setObjectName("toolbar_btn")
         self.archive_btn.setToolTip("Archive selected story or choose stories to archive")
@@ -5298,12 +5283,6 @@ class MainWindow(QMainWindow):
         self.bulk_edit_btn.clicked.connect(self._open_bulk_edit)
         self.bulk_edit_btn.setEnabled(False)
         fb_row2.addWidget(self.bulk_edit_btn)
-        self._help_btn = QPushButton("?")
-        self._help_btn.setObjectName("toolbar_btn")
-        self._help_btn.setFixedWidth(28)
-        self._help_btn.setToolTip("Keyboard shortcuts  (?)")
-        self._help_btn.clicked.connect(self._show_shortcut_dialog)
-        fb_row2.addWidget(self._help_btn)
         fb_row2.addStretch()
         fb_row2.addWidget(QLabel("ASSIGNEE"))
         self.assignee_filter_combo = QComboBox()
@@ -5493,6 +5472,82 @@ class MainWindow(QMainWindow):
         backlog_outer_layout.addWidget(self.backlog_widget, 1)
         self.tabs.addTab(backlog_outer, "☰  BACKLOG")
 
+        # ── Reports tab ───────────────────────────────────────────────────────
+        reports_outer = QWidget()
+        reports_outer_layout = QVBoxLayout(reports_outer)
+        reports_outer_layout.setContentsMargins(0, 0, 0, 0)
+        reports_outer_layout.setSpacing(0)
+
+        # Reports toolbar
+        reports_tb = QFrame()
+        reports_tb.setStyleSheet(f"background: {PANEL_BG}; border-bottom: 1px solid {BORDER};")
+        rtb = QHBoxLayout(reports_tb)
+        rtb.setContentsMargins(16, 6, 16, 6)
+        rtb.setSpacing(8)
+
+        # Sprint Report controls
+        rtb.addWidget(QLabel("SPRINT"))
+        self._rpt_sprint_combo = QComboBox()
+        self._rpt_sprint_combo.setMinimumWidth(200)
+        self._rpt_sprint_combo.setEnabled(False)
+        rtb.addWidget(self._rpt_sprint_combo)
+        self._rpt_gen_btn = QPushButton("📊  Sprint Report")
+        self._rpt_gen_btn.setObjectName("toolbar_btn")
+        self._rpt_gen_btn.setEnabled(False)
+        self._rpt_gen_btn.clicked.connect(self._reports_generate_sprint)
+        rtb.addWidget(self._rpt_gen_btn)
+        self._rpt_people_btn = QPushButton("👤  People Report")
+        self._rpt_people_btn.setObjectName("toolbar_btn")
+        self._rpt_people_btn.setEnabled(False)
+        self._rpt_people_btn.clicked.connect(self._reports_generate_people)
+        rtb.addWidget(self._rpt_people_btn)
+        self._rpt_velocity_btn = QPushButton("📈  Velocity")
+        self._rpt_velocity_btn.setObjectName("toolbar_btn")
+        self._rpt_velocity_btn.setEnabled(False)
+        self._rpt_velocity_btn.clicked.connect(self._reports_generate_velocity)
+        rtb.addWidget(self._rpt_velocity_btn)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color: {BORDER};")
+        rtb.addWidget(sep)
+
+        # Compare controls
+        rtb.addWidget(QLabel("COMPARE"))
+        self.compare_combo = QComboBox()
+        self.compare_combo.setMinimumWidth(180)
+        self.compare_combo.setEnabled(False)
+        self.compare_combo.setToolTip("Select a sprint to compare against the loaded sprint")
+        rtb.addWidget(self.compare_combo)
+        self.compare_btn = QPushButton("⇆  Compare")
+        self.compare_btn.setObjectName("toolbar_btn")
+        self.compare_btn.setEnabled(False)
+        self.compare_btn.clicked.connect(self._compare_sprints)
+        rtb.addWidget(self.compare_btn)
+
+        rtb.addStretch()
+        self._rpt_save_btn = QPushButton("⬇  Save HTML")
+        self._rpt_save_btn.setObjectName("toolbar_btn")
+        self._rpt_save_btn.setEnabled(False)
+        self._rpt_save_btn.clicked.connect(self._reports_save_html)
+        rtb.addWidget(self._rpt_save_btn)
+        reports_outer_layout.addWidget(reports_tb)
+
+        # Report browser — renders inline
+        self._reports_browser = QTextBrowser()
+        self._reports_browser.setOpenExternalLinks(True)
+        self._reports_browser.setStyleSheet(
+            "QTextBrowser { background: #ffffff; border: none; }"
+        )
+        self._reports_browser.setPlaceholderText(
+            "Select a sprint and click Sprint Report, People Report, or Velocity to generate a report."
+        )
+        self._reports_html = ""
+        reports_outer_layout.addWidget(self._reports_browser, 1)
+
+        self.tabs.addTab(reports_outer, "📊  REPORTS")
+
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         version_lbl = QLabel(f"◈  v{APP_VERSION}")
@@ -5577,6 +5632,9 @@ class MainWindow(QMainWindow):
         )
         QShortcut(QKeySequence("Alt+3"), self).activated.connect(
             lambda: self.tabs.setCurrentIndex(2)
+        )
+        QShortcut(QKeySequence("Alt+4"), self).activated.connect(
+            lambda: self.tabs.setCurrentIndex(3)
         )
 
     def _delete_selected_shortcut(self):
@@ -6514,9 +6572,16 @@ class MainWindow(QMainWindow):
 
         self.export_btn.setEnabled(False)
         self.bulk_create_btn.setEnabled(False)
-        self.report_btn.setEnabled(False)
+        self._rpt_gen_btn.setEnabled(False)
         self.archive_btn.setEnabled(False)
         self.bulk_edit_btn.setEnabled(False)
+        self._rpt_gen_btn.setEnabled(False)
+        self._rpt_people_btn.setEnabled(False)
+        self._rpt_velocity_btn.setEnabled(False)
+        self._rpt_save_btn.setEnabled(False)
+        self._rpt_sprint_combo.setEnabled(False)
+        self._rpt_sprint_combo.clear()
+        self._reports_browser.clear()
         self._progress_bar.setVisible(False)
         self._progress_bar.setValue(0)
         self.quick_add_edit.clear()
@@ -6925,6 +6990,19 @@ class MainWindow(QMainWindow):
         self.compare_combo.setEnabled(True)
         self.compare_btn.setEnabled(True)
         self.sprint_mgr_btn.setEnabled(True)
+        # Sync Reports tab sprint combo
+        self._rpt_sprint_combo.blockSignals(True)
+        self._rpt_sprint_combo.clear()
+        for s in sprints:
+            state = s.get("state", "")
+            self._rpt_sprint_combo.addItem(f"[{state.upper()}] {s['name']}", s["id"])
+        # Pre-select active sprint
+        for i in range(self._rpt_sprint_combo.count()):
+            if "[ACTIVE]" in self._rpt_sprint_combo.itemText(i):
+                self._rpt_sprint_combo.setCurrentIndex(i)
+                break
+        self._rpt_sprint_combo.blockSignals(False)
+        self._rpt_sprint_combo.setEnabled(True)
         bid = self.board_combo.currentData()
         if bid:
             last_sid = QSettings("SprintMate","SprintMate").value(f"last_sprint_{bid}")
@@ -6993,12 +7071,16 @@ class MainWindow(QMainWindow):
         self.bulk_create_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
-        self.report_btn.setEnabled(True)
-        self.velocity_btn.setEnabled(True)
+        self._rpt_gen_btn.setEnabled(True)
+        self._rpt_people_btn.setEnabled(True)
         self.archive_btn.setEnabled(True)
         self.bulk_edit_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
         self.load_backlog_btn.setEnabled(True)
+        self._rpt_gen_btn.setEnabled(True)
+        self._rpt_people_btn.setEnabled(True)
+        self._rpt_velocity_btn.setEnabled(True)
+        self._rpt_save_btn.setEnabled(False)  # enabled after first generation
         # Update Kanban board title with active sprint name
         sprint_name = self.sprint_combo.currentText()
         self.kanban_widget.set_sprint_name(sprint_name)
@@ -8573,18 +8655,93 @@ class MainWindow(QMainWindow):
 
     # ── Sprint Report ─────────────────────────────────────────────────────────
     def _open_sprint_report(self):
-        if not self._issues:
-            return
-        sprint_label  = self.sprint_lbl.text() or self.sprint_combo.currentText()
-        board_id      = self.board_combo.currentData() or 0
-        sprint_id     = self.sprint_combo.currentData()
-        # Fetch sprint detail for real start/end dates (best-effort, non-blocking)
-        sprint_detail = {}
-        if sprint_id and self._client:
+        """Legacy — now delegates to the Reports tab."""
+        self.tabs.setCurrentIndex(3)
+        self._reports_generate_sprint()
+
+    def _open_velocity_history(self):
+        """Legacy — now delegates to the Reports tab."""
+        self.tabs.setCurrentIndex(3)
+        self._reports_generate_velocity()
+
+    def _reports_switch(self):
+        """Switch to Reports tab."""
+        self.tabs.setCurrentIndex(3)
+
+    def _reports_get_sprint_issues(self) -> tuple:
+        """Return (issues, sprint_label, sprint_detail) for the Reports tab selection."""
+        sprint_id = self._rpt_sprint_combo.currentData()
+        sprint_label = self._rpt_sprint_combo.currentText()
+        if not sprint_id or not self._client:
+            return [], sprint_label, {}
+        # If the selected sprint matches the loaded one, reuse cached issues
+        if sprint_id == self.sprint_combo.currentData() and self._issues:
+            detail = {}
             try:
-                sprint_detail = self._client.get_sprint_detail(sprint_id)
+                detail = self._client.get_sprint_detail(sprint_id)
             except Exception:
                 pass
+            return self._issues, sprint_label, detail
+        # Otherwise fetch
+        self._busy(True)
+        self._status(f"Loading sprint for report…")
+        try:
+            issues = self._client.get_sprint_issues(
+                self.board_combo.currentData(), sprint_id
+            )
+            detail = {}
+            try:
+                detail = self._client.get_sprint_detail(sprint_id)
+            except Exception:
+                pass
+            return issues, sprint_label, detail
+        except Exception as e:
+            QMessageBox.critical(self, "Report Error", str(e))
+            return [], sprint_label, {}
+        finally:
+            self._busy(False)
+
+    def _reports_generate_sprint(self):
+        if not self._client:
+            return
+        self.tabs.setCurrentIndex(3)
+        issues, sprint_label, sprint_detail = self._reports_get_sprint_issues()
+        if not issues:
+            return
+        self._status(f"Generating sprint report…")
+        # Reuse SprintReportDialog's build logic without showing the dialog
+        dlg = SprintReportDialog(
+            issues=issues,
+            sprint_label=sprint_label,
+            sp_field=self._sp_field,
+            fl_field=self.edit_panel._fl_field,
+            base_url=self.edit_panel._base_url,
+            adf_to_text_fn=self.edit_panel._adf_to_text,
+            client=self._client,
+            board_id=self.board_combo.currentData() or 0,
+            sprint_detail=sprint_detail,
+            parent=self,
+        )
+        dlg._build_report(issues, sprint_label)
+        self._reports_html = dlg._html
+        self._reports_browser.setHtml(self._reports_html)
+        self._rpt_save_btn.setEnabled(True)
+        self._status(f"✓ Sprint report generated — {len(issues)} stories.")
+
+    def _reports_generate_people(self):
+        if not self._client or not self._issues:
+            return
+        self.tabs.setCurrentIndex(3)
+        # Collect assignees from current sprint
+        assignees = sorted({
+            (iss.get("fields", {}).get("assignee") or {}).get(
+                "displayName",
+                (iss.get("fields", {}).get("assignee") or {}).get("name", "")
+            )
+            for iss in self._issues
+            if (iss.get("fields", {}).get("assignee"))
+        })
+        sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
         dlg = SprintReportDialog(
             issues=self._issues,
             sprint_label=sprint_label,
@@ -8593,11 +8750,96 @@ class MainWindow(QMainWindow):
             base_url=self.edit_panel._base_url,
             adf_to_text_fn=self.edit_panel._adf_to_text,
             client=self._client,
-            board_id=board_id,
-            sprint_detail=sprint_detail,
+            board_id=self.board_combo.currentData() or 0,
+            sprint_detail={},
             parent=self,
         )
-        dlg.exec()
+        dlg._build_people_report(self._issues, assignees, sprint_label)
+        self._reports_html = dlg._people_html
+        self._reports_browser.setHtml(self._reports_html)
+        self._rpt_save_btn.setEnabled(True)
+        self._status(f"✓ People report generated.")
+
+    def _reports_generate_velocity(self):
+        if not self._client:
+            return
+        self.tabs.setCurrentIndex(3)
+        board_id = self.board_combo.currentData()
+        if not board_id:
+            return
+        self._busy(True)
+        self._status("Loading velocity history…")
+
+        def _do():
+            return self._client.get_velocity_history(board_id, num_sprints=8)
+
+        def _on_done(data):
+            self._busy(False)
+            if not data:
+                self._status("No closed sprints found.")
+                return
+            # Build a simple HTML velocity chart
+            dlg = VelocityHistoryDialog(board_id, self._client, self)
+            dlg._on_data(data)
+            # Extract the table HTML
+            rows = ""
+            for d in data:
+                pct = round(d["done_pts"] / d["total_pts"] * 100) if d["total_pts"] else 0
+                rows += (
+                    f"<tr>"
+                    f"<td>{d['name']}</td>"
+                    f"<td style='text-align:center;'>{d['total_pts']}</td>"
+                    f"<td style='text-align:center;color:#3fb950;font-weight:bold;'>{d['done_pts']}</td>"
+                    f"<td style='text-align:center;'>{d['n_total']}</td>"
+                    f"<td style='text-align:center;color:#3fb950;'>{d['n_done']}</td>"
+                    f"<td style='text-align:center;'>{pct}%</td>"
+                    f"</tr>"
+                )
+            html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         background:#f6f8fa;padding:32px 24px;color:#1f2328; }}
+  h1   {{ font-size:22px;font-weight:700;margin-bottom:4px; }}
+  .sub {{ color:#57606a;font-size:13px;margin-bottom:24px; }}
+  table {{ border-collapse:collapse;width:100%;background:#fff;
+           border:1px solid #d0d7de;border-radius:8px;overflow:hidden; }}
+  th {{ background:#f6f8fa;padding:10px 16px;text-align:left;font-size:11px;
+        font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+        color:#57606a;border-bottom:1px solid #d0d7de; }}
+  td {{ padding:10px 16px;border-bottom:1px solid #f0f0f0;font-size:13px; }}
+  tr:last-child td {{ border-bottom:none; }}
+  tr:hover td {{ background:#f6f8fa; }}
+</style></head><body>
+<h1>📈 Velocity History</h1>
+<div class="sub">{len(data)} most recent closed sprints</div>
+<table>
+  <tr><th>Sprint</th><th>Total Pts</th><th>Done Pts</th>
+      <th>Stories</th><th>Done</th><th>Completion</th></tr>
+  {rows}
+</table>
+</body></html>"""
+            self._reports_html = html
+            self._reports_browser.setHtml(html)
+            self._rpt_save_btn.setEnabled(True)
+            self._status(f"✓ Velocity history loaded — {len(data)} sprints.")
+
+        self._spawn(_do, on_result=_on_done,
+                    on_error=lambda e: (self._busy(False),
+                                        self._status(f"✗ Velocity load failed: {e}")))
+
+    def _reports_save_html(self):
+        if not self._reports_html:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Report", "sprintmate-report.html", "HTML Files (*.html)"
+        )
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(self._reports_html)
+                self._status(f"✓ Report saved to {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Failed", str(e))
 
     # ── Archive ───────────────────────────────────────────────────────────────
     def _open_archive(self):
@@ -9210,12 +9452,14 @@ class MainWindow(QMainWindow):
                 webbrowser.open(repo_url)
 
     def _show_about(self):
+        repo_url = "/".join(GITHUB_RAW_URL.split("/")[:5]).replace(
+            "raw.githubusercontent.com", "github.com"
+        )
         QMessageBox.about(
             self, "About SprintMate",
             f"<b>SprintMate</b> v{APP_VERSION}<br><br>"
             "Jira sprint management desktop client.<br><br>"
-            "<a href='https://github.com/YOUR_USERNAME/YOUR_REPO'>"
-            "View on GitHub</a>",
+            f"<a href='{repo_url}'>View on GitHub</a>",
         )
 
     def closeEvent(self, event):
