@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.24.0"
+APP_VERSION  = "2.25.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -5059,6 +5059,7 @@ class MainWindow(QMainWindow):
         self._column_prefs: dict[str, set] = {}   # board_id -> set of visible col indices
         self._recent_keys: list[str] = []          # MRU list of viewed issue keys
         self._unsaved_row: int | None = None       # row with pending edits
+        self._reports_html_map: dict[int, str] = {}  # reports sub-tab index -> html
 
         self._build_ui()
         self._settings = self._load_settings()
@@ -5478,42 +5479,48 @@ class MainWindow(QMainWindow):
         reports_outer_layout.setContentsMargins(0, 0, 0, 0)
         reports_outer_layout.setSpacing(0)
 
-        # Reports toolbar
+        # ── Reports toolbar ───────────────────────────────────────────────────
         reports_tb = QFrame()
         reports_tb.setStyleSheet(f"background: {PANEL_BG}; border-bottom: 1px solid {BORDER};")
         rtb = QHBoxLayout(reports_tb)
         rtb.setContentsMargins(16, 6, 16, 6)
         rtb.setSpacing(8)
 
-        # Sprint Report controls
         rtb.addWidget(QLabel("SPRINT"))
         self._rpt_sprint_combo = QComboBox()
         self._rpt_sprint_combo.setMinimumWidth(200)
         self._rpt_sprint_combo.setEnabled(False)
         rtb.addWidget(self._rpt_sprint_combo)
+
         self._rpt_gen_btn = QPushButton("📊  Sprint Report")
         self._rpt_gen_btn.setObjectName("toolbar_btn")
         self._rpt_gen_btn.setEnabled(False)
         self._rpt_gen_btn.clicked.connect(self._reports_generate_sprint)
         rtb.addWidget(self._rpt_gen_btn)
+
         self._rpt_people_btn = QPushButton("👤  People Report")
         self._rpt_people_btn.setObjectName("toolbar_btn")
         self._rpt_people_btn.setEnabled(False)
         self._rpt_people_btn.clicked.connect(self._reports_generate_people)
         rtb.addWidget(self._rpt_people_btn)
+
         self._rpt_velocity_btn = QPushButton("📈  Velocity")
         self._rpt_velocity_btn.setObjectName("toolbar_btn")
         self._rpt_velocity_btn.setEnabled(False)
         self._rpt_velocity_btn.clicked.connect(self._reports_generate_velocity)
         rtb.addWidget(self._rpt_velocity_btn)
 
-        # Separator
+        self._rpt_burndown_btn = QPushButton("📉  Burndown")
+        self._rpt_burndown_btn.setObjectName("toolbar_btn")
+        self._rpt_burndown_btn.setEnabled(False)
+        self._rpt_burndown_btn.clicked.connect(self._reports_generate_burndown)
+        rtb.addWidget(self._rpt_burndown_btn)
+
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
         sep.setStyleSheet(f"color: {BORDER};")
         rtb.addWidget(sep)
 
-        # Compare controls
         rtb.addWidget(QLabel("COMPARE"))
         self.compare_combo = QComboBox()
         self.compare_combo.setMinimumWidth(180)
@@ -5534,17 +5541,125 @@ class MainWindow(QMainWindow):
         rtb.addWidget(self._rpt_save_btn)
         reports_outer_layout.addWidget(reports_tb)
 
-        # Report browser — renders inline
-        self._reports_browser = QTextBrowser()
-        self._reports_browser.setOpenExternalLinks(True)
-        self._reports_browser.setStyleSheet(
-            "QTextBrowser { background: #ffffff; border: none; }"
+        # ── Reports sub-tabs ──────────────────────────────────────────────────
+        self._reports_tabs = QTabWidget()
+        self._reports_tabs.setDocumentMode(True)
+        self._reports_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: none; background: {DARK_BG}; }}
+            QTabBar::tab {{
+                background: {PANEL_BG}; color: {TEXT_SEC};
+                padding: 6px 18px; border: none;
+                border-bottom: 2px solid transparent;
+            }}
+            QTabBar::tab:selected {{
+                color: {ACCENT_CYAN}; background: {DARK_BG};
+                border-bottom: 2px solid {ACCENT_CYAN};
+            }}
+            QTabBar::tab:hover {{ color: {TEXT_PRI}; }}
+        """)
+        self._reports_tabs.currentChanged.connect(self._on_reports_tab_changed)
+
+        _browser_style = (
+            f"QTextBrowser {{ background: {DARK_BG}; border: none; color: {TEXT_PRI}; }}"
         )
-        self._reports_browser.setPlaceholderText(
-            "Select a sprint and click Sprint Report, People Report, or Velocity to generate a report."
+
+        # Sub-tab 0: Sprint Report
+        self._rpt_sprint_browser = QTextBrowser()
+        self._rpt_sprint_browser.setOpenExternalLinks(True)
+        self._rpt_sprint_browser.setStyleSheet(_browser_style)
+        self._reports_tabs.addTab(self._rpt_sprint_browser, "📊  Sprint Report")
+
+        # Sub-tab 1: People Report
+        self._rpt_people_browser = QTextBrowser()
+        self._rpt_people_browser.setOpenExternalLinks(True)
+        self._rpt_people_browser.setStyleSheet(_browser_style)
+        self._reports_tabs.addTab(self._rpt_people_browser, "👤  People Report")
+
+        # Sub-tab 2: Velocity
+        velocity_tab = QWidget()
+        velocity_tab.setStyleSheet(f"background: {DARK_BG};")
+        vel_layout = QVBoxLayout(velocity_tab)
+        vel_layout.setContentsMargins(16, 16, 16, 16)
+        vel_layout.setSpacing(12)
+
+        vel_heading = QLabel("◈  VELOCITY HISTORY")
+        vel_heading.setObjectName("heading")
+        vel_layout.addWidget(vel_heading)
+
+        # QSvgWidget for the bar chart — scales with the widget
+        try:
+            from PyQt6.QtSvgWidgets import QSvgWidget
+            self._rpt_vel_svg = QSvgWidget()
+            self._rpt_vel_svg.setMinimumHeight(260)
+            self._rpt_vel_svg.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            self._rpt_vel_svg.setStyleSheet(f"background: {PANEL_BG}; border-radius: 8px;")
+            self._rpt_vel_svg_available = True
+        except ImportError:
+            self._rpt_vel_svg = QLabel(
+                "Install PyQt6-Qt6-Svg for the velocity chart.\n"
+                "pip install PyQt6-Qt6-Svg\n\n"
+                "The table below is still available."
+            )
+            self._rpt_vel_svg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._rpt_vel_svg.setStyleSheet(f"color: {TEXT_SEC}; padding: 40px;")
+            self._rpt_vel_svg_available = False
+        vel_layout.addWidget(self._rpt_vel_svg, 1)
+
+        # Table below the chart
+        self._rpt_vel_table = QTableWidget()
+        self._rpt_vel_table.setColumnCount(6)
+        self._rpt_vel_table.setHorizontalHeaderLabels(
+            ["Sprint", "Total Pts", "Done Pts", "Stories", "Done", "Completion"]
         )
-        self._reports_html = ""
-        reports_outer_layout.addWidget(self._reports_browser, 1)
+        hh = self._rpt_vel_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for c in range(1, 6):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        self._rpt_vel_table.verticalHeader().setVisible(False)
+        self._rpt_vel_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._rpt_vel_table.setShowGrid(False)
+        self._rpt_vel_table.setMaximumHeight(220)
+        self._rpt_vel_table.setStyleSheet(
+            f"QTableWidget {{ background: {PANEL_BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }} "
+            f"QHeaderView::section {{ background: {CARD_BG}; color: {TEXT_SEC}; "
+            f"padding: 6px 12px; border: none; font-size: 10px; "
+            f"text-transform: uppercase; letter-spacing: 1px; }}"
+        )
+        vel_layout.addWidget(self._rpt_vel_table)
+        self._reports_tabs.addTab(velocity_tab, "📈  Velocity")
+
+        # Sub-tab 3: Compare
+        self._rpt_compare_browser = QTextBrowser()
+        self._rpt_compare_browser.setOpenExternalLinks(True)
+        self._rpt_compare_browser.setStyleSheet(_browser_style)
+        self._reports_tabs.addTab(self._rpt_compare_browser, "⇆  Compare")
+
+        # Sub-tab 4: Burndown
+        burndown_tab = QWidget()
+        burndown_tab.setStyleSheet(f"background: {DARK_BG};")
+        bd_layout = QVBoxLayout(burndown_tab)
+        bd_layout.setContentsMargins(16, 16, 16, 16)
+        bd_layout.setSpacing(12)
+
+        bd_heading = QLabel("◈  BURNDOWN CHART")
+        bd_heading.setObjectName("heading")
+        bd_layout.addWidget(bd_heading)
+
+        self._rpt_burndown_browser = QTextBrowser()
+        self._rpt_burndown_browser.setOpenExternalLinks(False)
+        self._rpt_burndown_browser.setStyleSheet(
+            f"QTextBrowser {{ background: {PANEL_BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 8px; }}"
+        )
+        bd_layout.addWidget(self._rpt_burndown_browser, 1)
+        self._reports_tabs.addTab(burndown_tab, "📉  Burndown")
+
+        self._reports_html      = ""   # tracks HTML for the active sub-tab
+        self._reports_html_map  = {}   # sub-tab index → html string
+        reports_outer_layout.addWidget(self._reports_tabs, 1)
 
         self.tabs.addTab(reports_outer, "📊  REPORTS")
 
@@ -6578,10 +6693,17 @@ class MainWindow(QMainWindow):
         self._rpt_gen_btn.setEnabled(False)
         self._rpt_people_btn.setEnabled(False)
         self._rpt_velocity_btn.setEnabled(False)
+        self._rpt_burndown_btn.setEnabled(False)
         self._rpt_save_btn.setEnabled(False)
         self._rpt_sprint_combo.setEnabled(False)
         self._rpt_sprint_combo.clear()
-        self._reports_browser.clear()
+        self._rpt_sprint_browser.clear()
+        self._rpt_people_browser.clear()
+        self._rpt_compare_browser.clear()
+        self._rpt_burndown_browser.clear()
+        self._reports_html_map.clear()
+        self._reports_html = ""
+        self._rpt_vel_table.setRowCount(0)
         self._progress_bar.setVisible(False)
         self._progress_bar.setValue(0)
         self.quick_add_edit.clear()
@@ -7080,6 +7202,7 @@ class MainWindow(QMainWindow):
         self._rpt_gen_btn.setEnabled(True)
         self._rpt_people_btn.setEnabled(True)
         self._rpt_velocity_btn.setEnabled(True)
+        self._rpt_burndown_btn.setEnabled(True)
         self._rpt_save_btn.setEnabled(False)  # enabled after first generation
         # Update Kanban board title with active sprint name
         sprint_name = self.sprint_combo.currentText()
@@ -8484,6 +8607,55 @@ class MainWindow(QMainWindow):
                    "Hover KEY for details.")
         self._status(summary)
 
+        # Build a summary HTML for the Compare sub-tab
+        rows_html = ""
+        for rec in self._compare_records:
+            type_colour = {
+                "added":   "#3fb950",
+                "changed": "#388bfd",
+                "removed": "#f78166",
+            }.get(rec["change_type"], "#8b949e")
+            rows_html += (
+                f"<tr>"
+                f"<td style='font-weight:600;color:{ACCENT_CYAN};'>{rec['key']}</td>"
+                f"<td style='color:{type_colour};font-weight:600;text-transform:uppercase;"
+                f"font-size:11px;'>{rec['change_type']}</td>"
+                f"<td style='color:#57606a;font-size:12px;'>{rec.get('diffs','')}</td>"
+                f"</tr>"
+            )
+        compare_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#f6f8fa;padding:32px 24px;color:#1f2328;}}
+  h1{{font-size:22px;font-weight:700;margin-bottom:4px;}}
+  .meta{{color:#57606a;font-size:13px;margin-bottom:24px;}}
+  .stat{{display:inline-block;padding:4px 14px;border-radius:20px;
+         font-size:12px;font-weight:600;margin-right:8px;margin-bottom:16px;}}
+  table{{border-collapse:collapse;width:100%;background:#fff;
+         border:1px solid #d0d7de;border-radius:8px;overflow:hidden;}}
+  th{{background:#f6f8fa;padding:10px 16px;text-align:left;font-size:10px;
+      font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+      color:#57606a;border-bottom:1px solid #d0d7de;}}
+  td{{padding:10px 16px;border-bottom:1px solid #f0f0f0;vertical-align:top;}}
+  tr:last-child td{{border-bottom:none;}}
+</style></head><body>
+<h1>⇆ Sprint Compare</h1>
+<div class="meta">vs {self._compare_label}</div>
+<div>
+  <span class="stat" style="background:#dcfce7;color:#3fb950;">{n_new} added</span>
+  <span class="stat" style="background:#dbeafe;color:#388bfd;">{n_changed} changed</span>
+  <span class="stat" style="background:#fff1ee;color:#f78166;">{n_removed} removed</span>
+</div>
+{"<table><tr><th>Key</th><th>Change</th><th>Details</th></tr>" + rows_html + "</table>"
+ if rows_html else "<p style='color:#57606a;'>No differences found.</p>"}
+</body></html>"""
+        self._rpt_compare_browser.setHtml(compare_html)
+        self._reports_html_map[3] = compare_html
+        self._reports_html = compare_html
+        self.tabs.setCurrentIndex(3)
+        self._reports_tabs.setCurrentIndex(3)
+        self._rpt_save_btn.setEnabled(True)
+
         if self._compare_records:
             reply = QMessageBox.question(
                 self, "Compare Complete",
@@ -8655,26 +8827,31 @@ class MainWindow(QMainWindow):
 
     # ── Sprint Report ─────────────────────────────────────────────────────────
     def _open_sprint_report(self):
-        """Legacy — now delegates to the Reports tab."""
+        """Legacy — delegates to the Reports tab."""
         self.tabs.setCurrentIndex(3)
+        self._reports_tabs.setCurrentIndex(0)
         self._reports_generate_sprint()
 
     def _open_velocity_history(self):
-        """Legacy — now delegates to the Reports tab."""
+        """Legacy — delegates to the Reports tab."""
         self.tabs.setCurrentIndex(3)
+        self._reports_tabs.setCurrentIndex(2)
         self._reports_generate_velocity()
 
+    def _on_reports_tab_changed(self, idx: int):
+        """Update Save HTML button state when switching sub-tabs."""
+        html = self._reports_html_map.get(idx, "")
+        self._reports_html = html
+        self._rpt_save_btn.setEnabled(bool(html))
+
     def _reports_switch(self):
-        """Switch to Reports tab."""
         self.tabs.setCurrentIndex(3)
 
     def _reports_get_sprint_issues(self) -> tuple:
-        """Return (issues, sprint_label, sprint_detail) for the Reports tab selection."""
-        sprint_id = self._rpt_sprint_combo.currentData()
+        sprint_id    = self._rpt_sprint_combo.currentData()
         sprint_label = self._rpt_sprint_combo.currentText()
         if not sprint_id or not self._client:
             return [], sprint_label, {}
-        # If the selected sprint matches the loaded one, reuse cached issues
         if sprint_id == self.sprint_combo.currentData() and self._issues:
             detail = {}
             try:
@@ -8682,9 +8859,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             return self._issues, sprint_label, detail
-        # Otherwise fetch
         self._busy(True)
-        self._status(f"Loading sprint for report…")
+        self._status("Loading sprint for report…")
         try:
             issues = self._client.get_sprint_issues(
                 self.board_combo.currentData(), sprint_id
@@ -8705,65 +8881,62 @@ class MainWindow(QMainWindow):
         if not self._client:
             return
         self.tabs.setCurrentIndex(3)
+        self._reports_tabs.setCurrentIndex(0)
         issues, sprint_label, sprint_detail = self._reports_get_sprint_issues()
         if not issues:
             return
-        self._status(f"Generating sprint report…")
-        # Reuse SprintReportDialog's build logic without showing the dialog
+        self._status("Generating sprint report…")
         dlg = SprintReportDialog(
-            issues=issues,
-            sprint_label=sprint_label,
-            sp_field=self._sp_field,
-            fl_field=self.edit_panel._fl_field,
+            issues=issues, sprint_label=sprint_label,
+            sp_field=self._sp_field, fl_field=self.edit_panel._fl_field,
             base_url=self.edit_panel._base_url,
             adf_to_text_fn=self.edit_panel._adf_to_text,
-            client=self._client,
-            board_id=self.board_combo.currentData() or 0,
-            sprint_detail=sprint_detail,
-            parent=self,
+            client=self._client, board_id=self.board_combo.currentData() or 0,
+            sprint_detail=sprint_detail, parent=self,
         )
         dlg._build_report(issues, sprint_label)
-        self._reports_html = dlg._html
-        self._reports_browser.setHtml(self._reports_html)
+        html = dlg._html
+        self._rpt_sprint_browser.setHtml(html)
+        self._reports_html_map[0] = html
+        self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
-        self._status(f"✓ Sprint report generated — {len(issues)} stories.")
+        self._status(f"✓ Sprint report — {len(issues)} stories.")
 
     def _reports_generate_people(self):
         if not self._client or not self._issues:
             return
         self.tabs.setCurrentIndex(3)
-        # Collect assignees from current sprint
+        self._reports_tabs.setCurrentIndex(1)
         assignees = sorted({
             (iss.get("fields", {}).get("assignee") or {}).get(
                 "displayName",
                 (iss.get("fields", {}).get("assignee") or {}).get("name", "")
             )
             for iss in self._issues
-            if (iss.get("fields", {}).get("assignee"))
+            if iss.get("fields", {}).get("assignee")
         })
         sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
         dlg = SprintReportDialog(
-            issues=self._issues,
-            sprint_label=sprint_label,
-            sp_field=self._sp_field,
-            fl_field=self.edit_panel._fl_field,
+            issues=self._issues, sprint_label=sprint_label,
+            sp_field=self._sp_field, fl_field=self.edit_panel._fl_field,
             base_url=self.edit_panel._base_url,
             adf_to_text_fn=self.edit_panel._adf_to_text,
-            client=self._client,
-            board_id=self.board_combo.currentData() or 0,
-            sprint_detail={},
-            parent=self,
+            client=self._client, board_id=self.board_combo.currentData() or 0,
+            sprint_detail={}, parent=self,
         )
         dlg._build_people_report(self._issues, assignees, sprint_label)
-        self._reports_html = dlg._people_html
-        self._reports_browser.setHtml(self._reports_html)
+        html = dlg._people_html
+        self._rpt_people_browser.setHtml(html)
+        self._reports_html_map[1] = html
+        self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
-        self._status(f"✓ People report generated.")
+        self._status("✓ People report generated.")
 
     def _reports_generate_velocity(self):
         if not self._client:
             return
         self.tabs.setCurrentIndex(3)
+        self._reports_tabs.setCurrentIndex(2)
         board_id = self.board_combo.currentData()
         if not board_id:
             return
@@ -8778,57 +8951,269 @@ class MainWindow(QMainWindow):
             if not data:
                 self._status("No closed sprints found.")
                 return
-            # Build a simple HTML velocity chart
-            dlg = VelocityHistoryDialog(board_id, self._client, self)
-            dlg._on_data(data)
-            # Extract the table HTML
-            rows = ""
+
+            # Build SVG bar chart
+            W, H      = 660, 240
+            PAD_L, PAD_R, PAD_T, PAD_B = 52, 16, 24, 56
+            chart_w   = W - PAD_L - PAD_R
+            chart_h   = H - PAD_T - PAD_B
+            n         = len(data)
+            max_pts   = max((d["total_pts"] for d in data), default=1) or 1
+            bar_group = chart_w / n
+            bar_w     = max(4, int(bar_group * 0.35))
+            gap       = max(2, int(bar_group * 0.06))
+
+            def py(pts):
+                return PAD_T + chart_h - round(pts / max_pts * chart_h)
+
+            bars = x_labels = y_ticks = ""
+            for i, d in enumerate(data):
+                cx  = PAD_L + int(i * bar_group + bar_group / 2)
+                bx1 = cx - bar_w - gap // 2
+                bh1 = round(d["total_pts"] / max_pts * chart_h)
+                by1 = PAD_T + chart_h - bh1
+                bx2 = cx + gap // 2
+                bh2 = round(d["done_pts"]  / max_pts * chart_h)
+                by2 = PAD_T + chart_h - bh2
+                bars += (
+                    f'<rect x="{bx1}" y="{by1}" width="{bar_w}" height="{bh1}" '
+                    f'fill="{ACCENT_BLUE}" rx="3" opacity="0.7"/>'
+                    f'<rect x="{bx2}" y="{by2}" width="{bar_w}" height="{bh2}" '
+                    f'fill="{ACCENT_GREEN}" rx="3"/>'
+                )
+                if d["total_pts"]:
+                    bars += (
+                        f'<text x="{bx1+bar_w//2}" y="{by1-4}" text-anchor="middle" '
+                        f'fill="{TEXT_SEC}" font-size="9" font-family="sans-serif">'
+                        f'{d["total_pts"]}</text>'
+                        f'<text x="{bx2+bar_w//2}" y="{by2-4}" text-anchor="middle" '
+                        f'fill="{ACCENT_GREEN}" font-size="9" font-family="sans-serif">'
+                        f'{d["done_pts"]}</text>'
+                    )
+                short = (d["name"][:13] + "…") if len(d["name"]) > 13 else d["name"]
+                x_labels += (
+                    f'<text x="{cx}" y="{PAD_T+chart_h+14}" text-anchor="middle" '
+                    f'fill="{TEXT_SEC}" font-size="9" font-family="sans-serif">{short}</text>'
+                )
+
+            for v in range(0, int(max_pts) + 1, max(1, int(max_pts) // 5)):
+                yy = py(v)
+                y_ticks += (
+                    f'<line x1="{PAD_L}" y1="{yy}" x2="{PAD_L+chart_w}" y2="{yy}" '
+                    f'stroke="{BORDER}" stroke-width="1"/>'
+                    f'<text x="{PAD_L-6}" y="{yy+4}" text-anchor="end" '
+                    f'fill="{TEXT_SEC}" font-size="9" font-family="sans-serif">{v}</text>'
+                )
+
+            legend = (
+                f'<rect x="{PAD_L}" y="{H-20}" width="12" height="10" '
+                f'fill="{ACCENT_BLUE}" rx="2" opacity="0.7"/>'
+                f'<text x="{PAD_L+16}" y="{H-11}" fill="{TEXT_SEC}" '
+                f'font-size="10" font-family="sans-serif">Committed</text>'
+                f'<rect x="{PAD_L+96}" y="{H-20}" width="12" height="10" '
+                f'fill="{ACCENT_GREEN}" rx="2"/>'
+                f'<text x="{PAD_L+112}" y="{H-11}" fill="{TEXT_SEC}" '
+                f'font-size="10" font-family="sans-serif">Completed</text>'
+            )
+
+            svg = (
+                f'<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+                f'xmlns="http://www.w3.org/2000/svg" '
+                f'style="background:{PANEL_BG};">'
+                f'{y_ticks}{bars}{x_labels}{legend}'
+                f'<line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" '
+                f'y2="{PAD_T+chart_h}" stroke="{BORDER}" stroke-width="1"/>'
+                f'<line x1="{PAD_L}" y1="{PAD_T+chart_h}" '
+                f'x2="{PAD_L+chart_w}" y2="{PAD_T+chart_h}" '
+                f'stroke="{BORDER}" stroke-width="1"/>'
+                f'</svg>'
+            )
+
+            # Render into QSvgWidget or fall back gracefully
+            if getattr(self, '_rpt_vel_svg_available', False):
+                self._rpt_vel_svg.load(QByteArray(svg.encode()))
+            else:
+                if hasattr(self._rpt_vel_svg, 'setText'):
+                    self._rpt_vel_svg.setText(
+                        "PyQt6-Qt6-Svg not installed — chart unavailable.\n"
+                        "pip install PyQt6-Qt6-Svg"
+                    )
+
+            # Populate table
+            self._rpt_vel_table.setSortingEnabled(False)
+            self._rpt_vel_table.setRowCount(0)
             for d in data:
                 pct = round(d["done_pts"] / d["total_pts"] * 100) if d["total_pts"] else 0
-                rows += (
-                    f"<tr>"
-                    f"<td>{d['name']}</td>"
-                    f"<td style='text-align:center;'>{d['total_pts']}</td>"
-                    f"<td style='text-align:center;color:#3fb950;font-weight:bold;'>{d['done_pts']}</td>"
-                    f"<td style='text-align:center;'>{d['n_total']}</td>"
-                    f"<td style='text-align:center;color:#3fb950;'>{d['n_done']}</td>"
-                    f"<td style='text-align:center;'>{pct}%</td>"
-                    f"</tr>"
-                )
+                row = self._rpt_vel_table.rowCount()
+                self._rpt_vel_table.insertRow(row)
+                self._rpt_vel_table.setItem(row, 0, QTableWidgetItem(d["name"]))
+                for c, (val, colour) in enumerate([
+                    (d["total_pts"], None),
+                    (d["done_pts"],  ACCENT_GREEN),
+                    (d["n_total"],   None),
+                    (d["n_done"],    ACCENT_GREEN),
+                    (f"{pct}%",      None),
+                ], 1):
+                    it = QTableWidgetItem(str(val))
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if colour:
+                        it.setForeground(QColor(colour))
+                    self._rpt_vel_table.setItem(row, c, it)
+                self._rpt_vel_table.setRowHeight(row, 32)
+            self._rpt_vel_table.setSortingEnabled(True)
+
+            # Build exportable HTML for save
+            rows = "".join(
+                f"<tr><td>{d['name']}</td>"
+                f"<td style='text-align:center'>{d['total_pts']}</td>"
+                f"<td style='text-align:center;color:#3fb950;font-weight:bold'>{d['done_pts']}</td>"
+                f"<td style='text-align:center'>{d['n_total']}</td>"
+                f"<td style='text-align:center;color:#3fb950'>{d['n_done']}</td>"
+                f"<td style='text-align:center'>"
+                f"{round(d['done_pts']/d['total_pts']*100) if d['total_pts'] else 0}%</td></tr>"
+                for d in data
+            )
             html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
-  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-         background:#f6f8fa;padding:32px 24px;color:#1f2328; }}
-  h1   {{ font-size:22px;font-weight:700;margin-bottom:4px; }}
-  .sub {{ color:#57606a;font-size:13px;margin-bottom:24px; }}
-  table {{ border-collapse:collapse;width:100%;background:#fff;
-           border:1px solid #d0d7de;border-radius:8px;overflow:hidden; }}
-  th {{ background:#f6f8fa;padding:10px 16px;text-align:left;font-size:11px;
-        font-weight:700;text-transform:uppercase;letter-spacing:.6px;
-        color:#57606a;border-bottom:1px solid #d0d7de; }}
-  td {{ padding:10px 16px;border-bottom:1px solid #f0f0f0;font-size:13px; }}
-  tr:last-child td {{ border-bottom:none; }}
-  tr:hover td {{ background:#f6f8fa; }}
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#f6f8fa;padding:32px 24px;color:#1f2328;}}
+  h1{{font-size:22px;font-weight:700;margin-bottom:4px;}}
+  .sub{{color:#57606a;font-size:13px;margin-bottom:24px;}}
+  table{{border-collapse:collapse;width:100%;background:#fff;
+         border:1px solid #d0d7de;border-radius:8px;overflow:hidden;}}
+  th{{background:#f6f8fa;padding:10px 16px;text-align:left;font-size:11px;
+      font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+      color:#57606a;border-bottom:1px solid #d0d7de;}}
+  td{{padding:10px 16px;border-bottom:1px solid #f0f0f0;font-size:13px;}}
+  tr:last-child td{{border-bottom:none;}}
 </style></head><body>
 <h1>📈 Velocity History</h1>
 <div class="sub">{len(data)} most recent closed sprints</div>
-<table>
-  <tr><th>Sprint</th><th>Total Pts</th><th>Done Pts</th>
-      <th>Stories</th><th>Done</th><th>Completion</th></tr>
-  {rows}
-</table>
+<table><tr><th>Sprint</th><th>Total Pts</th><th>Done Pts</th>
+<th>Stories</th><th>Done</th><th>Completion</th></tr>{rows}</table>
 </body></html>"""
+            self._reports_html_map[2] = html
             self._reports_html = html
-            self._reports_browser.setHtml(html)
             self._rpt_save_btn.setEnabled(True)
-            self._status(f"✓ Velocity history loaded — {len(data)} sprints.")
+            self._status(f"✓ Velocity — {len(data)} sprints.")
 
         self._spawn(_do, on_result=_on_done,
-                    on_error=lambda e: (self._busy(False),
-                                        self._status(f"✗ Velocity load failed: {e}")))
+                    on_error=lambda e: (
+                        self._busy(False),
+                        self._status(f"✗ Velocity failed: {e}"),
+                    ))
+
+    def _reports_generate_burndown(self):
+        """Generate a standalone burndown chart in the Burndown sub-tab."""
+        if not self._issues or not self._client:
+            return
+        self.tabs.setCurrentIndex(3)
+        self._reports_tabs.setCurrentIndex(4)
+
+        sprint_id    = self.sprint_combo.currentData()
+        sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
+
+        sprint_detail = {}
+        if sprint_id:
+            try:
+                sprint_detail = self._client.get_sprint_detail(sprint_id)
+            except Exception:
+                pass
+
+        # Compute stats from current issues
+        sp        = self._sp_field
+        total_pts = done_pts = n_done = 0
+        for iss in self._issues:
+            f      = iss.get("fields", {})
+            status = (f.get("status") or {}).get("name", "")
+            pts_raw = next(
+                (f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS)
+                 if f.get(k) is not None), None
+            )
+            try:
+                pts = int(float(pts_raw)) if pts_raw is not None else 0
+            except (TypeError, ValueError):
+                pts = 0
+            total_pts += pts
+            if status == "Done":
+                done_pts += pts
+                n_done   += 1
+
+        # Reuse SprintReportDialog's burndown SVG builder
+        dlg = SprintReportDialog(
+            issues=self._issues, sprint_label=sprint_label,
+            sp_field=sp, fl_field=self.edit_panel._fl_field,
+            base_url=self.edit_panel._base_url,
+            adf_to_text_fn=self.edit_panel._adf_to_text,
+            client=self._client,
+            board_id=self.board_combo.currentData() or 0,
+            sprint_detail=sprint_detail, parent=self,
+        )
+        svg = dlg._build_burndown_svg(total_pts, done_pts, len(self._issues), n_done)
+
+        # Build a minimal HTML wrapper styled to match the app
+        start_str = (sprint_detail.get("startDate") or "")[:10]
+        end_str   = (sprint_detail.get("endDate")   or "")[:10]
+        date_range = f"{start_str} → {end_str}" if start_str and end_str else ""
+        pct_done  = round(done_pts / total_pts * 100) if total_pts else 0
+
+        html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         background:#f6f8fa; padding:28px 24px; color:#1f2328; margin:0; }}
+  h1   {{ font-size:20px; font-weight:700; margin:0 0 4px; }}
+  .meta {{ color:#57606a; font-size:12px; margin-bottom:20px; }}
+  .card {{ background:#fff; border:1px solid #d0d7de; border-radius:10px;
+           padding:20px 24px; box-shadow:0 1px 3px rgba(0,0,0,.04); }}
+  .stats {{ display:flex; gap:32px; margin-top:16px; padding-top:14px;
+            border-top:1px solid #f0f0f0; font-size:12px; }}
+  .stat-lbl {{ color:#57606a; margin-bottom:2px; }}
+  .stat-val {{ font-size:20px; font-weight:700; color:#1f2328; }}
+  .stat-val.green {{ color:#3fb950; }}
+  .stat-val.blue  {{ color:#388bfd; }}
+  @media print {{
+    body {{ background:#fff; padding:16px; }}
+    .card {{ box-shadow:none; }}
+  }}
+</style></head><body>
+<h1>📉 Burndown Chart</h1>
+<div class="meta">{sprint_label}{' &nbsp;·&nbsp; ' + date_range if date_range else ''}</div>
+<div class="card">
+  {svg}
+  <div class="stats">
+    <div>
+      <div class="stat-lbl">Total Points</div>
+      <div class="stat-val blue">{total_pts}</div>
+    </div>
+    <div>
+      <div class="stat-lbl">Points Done</div>
+      <div class="stat-val green">{done_pts}</div>
+    </div>
+    <div>
+      <div class="stat-lbl">Remaining</div>
+      <div class="stat-val">{total_pts - done_pts}</div>
+    </div>
+    <div>
+      <div class="stat-lbl">Completion</div>
+      <div class="stat-val {'green' if pct_done >= 80 else 'blue'}">{pct_done}%</div>
+    </div>
+    <div>
+      <div class="stat-lbl">Stories Done</div>
+      <div class="stat-val">{n_done} / {len(self._issues)}</div>
+    </div>
+  </div>
+</div>
+</body></html>"""
+
+        self._rpt_burndown_browser.setHtml(html)
+        self._reports_html_map[4] = html
+        self._reports_html = html
+        self._rpt_save_btn.setEnabled(True)
+        self._status(f"✓ Burndown — {total_pts} pts total, {done_pts} done ({pct_done}%).")
 
     def _reports_save_html(self):
-        if not self._reports_html:
+        html = self._reports_html_map.get(self._reports_tabs.currentIndex(), "")
+        if not html:
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Report", "sprintmate-report.html", "HTML Files (*.html)"
@@ -8836,7 +9221,7 @@ class MainWindow(QMainWindow):
         if path:
             try:
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write(self._reports_html)
+                    f.write(html)
                 self._status(f"✓ Report saved to {path}")
             except Exception as e:
                 QMessageBox.critical(self, "Save Failed", str(e))
