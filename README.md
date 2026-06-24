@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.25.3
+# SprintMate  ◈  v2.26.0
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -369,7 +369,9 @@ The board is populated from the currently loaded sprint and persists between tab
 
 ### Backlog view
 
-Click **☰ Backlog** in the top bar (or press `Alt+3`) to switch to the Backlog view. Click **↺ Load Backlog** to fetch all open issues for the current project that have no sprint assigned.
+Click **☰ Backlog** in the top bar (or press `Alt+3`) to switch to the Backlog view.
+
+A load bar at the top of the tab contains PROJECT and BOARD dropdowns and a **↺ Load Backlog** button. The dropdowns are pre-filled to match whatever is selected on the Stories tab. Select a project and board, then click **↺ Load Backlog** to fetch all open issues that have no sprint assigned. The load bar works the same way as the Active Sprint board's load toolbar — you can load a backlog without visiting the Stories tab first.
 
 Results display in a sortable, filterable table with columns for KEY, SUMMARY, ASSIGNEE, PRIORITY, PTS, TYPE, and DUE DATE. Use the filter box at the top to search live across all columns.
 
@@ -561,9 +563,9 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 
 ### How to browse and groom the backlog
 
-1. Select a project and board (stories don't need to be loaded first).
-2. Click **☰ Backlog** in the top bar (or press `Alt+3`).
-3. Click **↺ Load Backlog** to fetch all unsprinted open stories for the current project.
+1. Click **☰ Backlog** in the top bar (or press `Alt+3`).
+2. In the load bar at the top, select a PROJECT and BOARD (pre-filled from the Stories tab).
+3. Click **↺ Load Backlog** to fetch all unsprinted open stories for the selected project.
 4. Use the filter box to search, or click any column header to sort.
 5. **Right-click any row** for quick actions: Open in Jira, Copy Key, or Move to Sprint.
 6. To move stories into a sprint: select one or more rows, choose a sprint from the **Move to sprint** dropdown, and click **⇧ Move** (or use the right-click menu).
