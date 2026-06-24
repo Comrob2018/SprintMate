@@ -5762,10 +5762,17 @@ class MainWindow(QMainWindow):
         self._reports_tabs.addTab(velocity_tab, "📈  Velocity")
 
         # Sub-tab 3: Compare
+        compare_tab = QWidget()
+        compare_tab.setStyleSheet(f"background: {DARK_BG};")
+        cmp_layout = QVBoxLayout(compare_tab)
+        cmp_layout.setContentsMargins(0, 0, 0, 0)
         self._rpt_compare_browser = QTextBrowser()
         self._rpt_compare_browser.setOpenExternalLinks(True)
-        self._rpt_compare_browser.setStyleSheet(_browser_style)
-        self._reports_tabs.addTab(self._rpt_compare_browser, "⇆  Compare")
+        self._rpt_compare_browser.setStyleSheet(
+            f"QTextBrowser {{ background: {DARK_BG}; border: none; color: {TEXT_PRI}; }}"
+        )
+        cmp_layout.addWidget(self._rpt_compare_browser)
+        self._reports_tabs.addTab(compare_tab, "⇆  Compare")
 
         # Sub-tab 4: Burndown
         burndown_tab = QWidget()
@@ -5781,8 +5788,7 @@ class MainWindow(QMainWindow):
         self._rpt_burndown_browser = QTextBrowser()
         self._rpt_burndown_browser.setOpenExternalLinks(False)
         self._rpt_burndown_browser.setStyleSheet(
-            f"QTextBrowser {{ background: {PANEL_BG}; border: 1px solid {BORDER}; "
-            f"border-radius: 8px; }}"
+            f"QTextBrowser {{ background: {DARK_BG}; border: none; color: {TEXT_PRI}; }}"
         )
         bd_layout.addWidget(self._rpt_burndown_browser, 1)
         self._reports_tabs.addTab(burndown_tab, "📉  Burndown")
@@ -8815,8 +8821,8 @@ class MainWindow(QMainWindow):
 {"<table><tr><th>Key</th><th>Change</th><th>Details</th></tr>" + rows_html + "</table>"
  if rows_html else "<p style='color:#57606a;'>No differences found.</p>"}
 </body></html>"""
-        self._rpt_compare_browser.setHtml(compare_html)
-        self._reports_html_map[3] = compare_html
+        self._rpt_compare_browser.setHtml(self._dark_html(compare_html))
+        self._reports_html_map[3] = compare_html  # export uses original
         self._reports_html = compare_html
         self.tabs.setCurrentIndex(3)
         self._reports_tabs.setCurrentIndex(3)
@@ -9120,8 +9126,8 @@ class MainWindow(QMainWindow):
         )
         dlg._build_report(issues, sprint_label)
         html = dlg._html
-        self._rpt_sprint_browser.setHtml(html)
-        self._reports_html_map[0] = html
+        self._rpt_sprint_browser.setHtml(self._dark_html(html))
+        self._reports_html_map[0] = html  # export uses original light HTML
         self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
         self._status(f"✓ Sprint report — {len(issues)} stories.")
@@ -9203,8 +9209,8 @@ class MainWindow(QMainWindow):
         )
         dlg._build_people_report(issues, assignees, sprint_label)
         html = dlg._people_html
-        self._rpt_people_browser.setHtml(html)
-        self._reports_html_map[1] = html
+        self._rpt_people_browser.setHtml(self._dark_html(html))
+        self._reports_html_map[1] = html  # export uses original light HTML
         self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
         self._status(f"\u2713 People report \u2014 {len(assignees)} people.")
@@ -9380,6 +9386,55 @@ class MainWindow(QMainWindow):
                         self._status(f"✗ Velocity failed: {e}"),
                     ))
 
+    def _dark_html(self, html: str) -> str:
+        """Inject a dark-theme CSS override into an HTML report for in-app display.
+        The original light-theme HTML is preserved separately for export."""
+        dark_css = f"""<style>
+/* Dark theme override for in-app display */
+body {{
+    background: {DARK_BG} !important;
+    color: {TEXT_PRI} !important;
+}}
+.report-header {{
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%) !important;
+}}
+.stat-card, .card, .assignee-card, .table-wrap, .burndown-card {{
+    background: {PANEL_BG} !important;
+    border-color: {BORDER} !important;
+    color: {TEXT_PRI} !important;
+}}
+.card-title, .stat-val, .stat-lbl {{
+    color: {TEXT_PRI} !important;
+}}
+.stat-sub, .section-heading {{
+    color: {TEXT_SEC} !important;
+}}
+.section-heading::after {{
+    background: {BORDER} !important;
+}}
+table {{
+    background: {PANEL_BG} !important;
+    color: {TEXT_PRI} !important;
+}}
+thead th {{
+    background: {CARD_BG} !important;
+    color: {TEXT_SEC} !important;
+    border-color: {BORDER} !important;
+}}
+tbody td {{
+    border-color: {BORDER} !important;
+    color: {TEXT_PRI} !important;
+}}
+tbody tr:hover td {{
+    background: {CARD_BG} !important;
+}}
+a {{ color: {ACCENT_CYAN} !important; }}
+</style>"""
+        # Inject after <head> or at the top of <body>
+        if '<head>' in html:
+            return html.replace('<head>', f'<head>{dark_css}', 1)
+        return dark_css + html
+
     def _reports_generate_burndown(self):
         """Generate a standalone burndown chart in the Burndown sub-tab."""
         if not self._issues or not self._client:
@@ -9482,8 +9537,8 @@ class MainWindow(QMainWindow):
 </div>
 </body></html>"""
 
-        self._rpt_burndown_browser.setHtml(html)
-        self._reports_html_map[4] = html
+        self._rpt_burndown_browser.setHtml(self._dark_html(html))
+        self._reports_html_map[4] = html  # export uses original light HTML
         self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
         self._status(f"✓ Burndown — {total_pts} pts total, {done_pts} done ({pct_done}%).")
