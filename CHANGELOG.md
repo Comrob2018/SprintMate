@@ -1,4 +1,18 @@
 # SprintMate Changelog
+## [2.21.0] — 2026-06-23
+### Features
+* **Professional sprint report redesign.** `_build_report` and `_build_burndown_svg` were fully rewritten. The report is now a dashboard-style HTML document rendered on a light grey background with white card surfaces, subtle box shadows, and a consistent font stack (`-apple-system`, `Segoe UI`, `Helvetica`, `Arial`).
+  **Report header** — a dark gradient panel (`#1c2128 → #2d333b`) contains the report title, sprint name as a subtitle, and a meta row with the sprint date range (when available), generation date, and a story/points count.
+  **Stat cards** — five white cards in a flex row, each with a coloured left-border accent, an emoji icon, a large metric, a label, and a contextual sub-line (e.g. "12 remaining"). The velocity card replaces the number with an inline SVG circular progress ring with the percentage overlaid in the centre.
+  **Section headings** — small all-caps labels with a horizontal rule extending to the right edge, providing clear visual separation between report sections.
+  **Burndown chart** — rebuilt with a proper background grid (vertical day lines and horizontal point lines), a green-tinted ideal-region shading, a blue-tinted actual-region shading, a thicker actual line with a rounded dot at the current position, and an ahead/behind callout label (`▲ N pts ahead` / `▼ N pts behind` / `On track`) positioned above the day marker. The callout anchor shifts left or right at chart edges to prevent clipping.
+  **Status breakdown** — replaced the plain count table with a proportional horizontal stacked bar (one segment per status, coloured to match the app's status colour map) and a flex legend row below showing a colour swatch, name, count, and percentage. Zero-count statuses are omitted.
+  **Team section** — replaced the assignee table with a responsive CSS grid of per-person cards. Each card shows an avatar circle with initials, name and story/points count, two inline progress bars (stories complete and points complete with percentages), and a footer row showing done / pts done / remaining as coloured numbers.
+  **Story table** — sticky column headers, full-row hover highlight, pill-shaped status badges (coloured background matching status), directional priority symbols with colour coding (▲▲ Highest red → ▼▼ Lowest grey), and overdue rows highlighted with a full red-tinted row background (previously only the due date cell was coloured).
+  **Print/export CSS** — a `@media print` block ensures the dark header prints correctly (`-webkit-print-color-adjust: exact`), removes box shadows, prevents cards from breaking across pages, and un-sticks table headers for pagination.
+
+---
+
 ## [2.20.0] — 2026-06-23
 ### Features
 * **Kanban filter bar.** A filter bar now sits below the board header with three controls that work together in real time — no button press required.
