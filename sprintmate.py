@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.19.0"
+APP_VERSION  = "2.21.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -2760,338 +2760,542 @@ class SprintReportDialog(QDialog):
         worker.start()
         self._sr_worker = worker
 
-    def _build_report(self, issues: list = None, scope_label: str = ""):
-        issues = issues if issues is not None else self._issues
-        sp     = self._sp_field
-        today  = date.today().strftime("%Y-%m-%d")
-        title  = scope_label or self._sprint_label
+        def _build_report(self, issues: list = None, scope_label: str = ""):
+            issues    = issues if issues is not None else self._issues
+            sp        = self._sp_field
+            today_str = date.today().strftime("%B %d, %Y")
+            title     = scope_label or self._sprint_label
 
-        # ── Aggregate stats ───────────────────────────────────────────────────
-        total_pts = done_pts = 0
-        status_counts: dict[str, int] = {}
-        assignee_stats: dict[str, dict] = {}
+            total_pts = done_pts = 0
+            status_counts: dict[str, int]   = {}
+            assignee_stats: dict[str, dict] = {}
 
-        for iss in issues:
-            f = iss.get("fields", {})
-            status = (f.get("status") or {}).get("name", "—")
-            status_counts[status] = status_counts.get(status, 0) + 1
-
-            pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
-            try:
-                pts = int(float(pts_raw)) if pts_raw is not None else 0
-            except (TypeError, ValueError):
-                pts = 0
-            total_pts += pts
-            if status == "Done":
-                done_pts += pts
-
-            aobj = f.get("assignee") or {}
-            aname = aobj.get("displayName") or aobj.get("name") or "Unassigned"
-            if aname not in assignee_stats:
-                assignee_stats[aname] = {"total": 0, "done": 0, "pts": 0, "done_pts": 0, "stories": []}
-            assignee_stats[aname]["total"] += 1
-            assignee_stats[aname]["pts"] += pts
-            if status == "Done":
-                assignee_stats[aname]["done"] += 1
-                assignee_stats[aname]["done_pts"] += pts
-            assignee_stats[aname]["stories"].append(iss)
-
-        pct_done = round(done_pts / total_pts * 100) if total_pts else 0
-        n_done   = status_counts.get("Done", 0)
-        n_total  = len(self._issues)
-
-        # ── Status colour map (inline CSS) ───────────────────────────────────
-        STATUS_CSS = {
-            "To Do":       "#6e7681",
-            "In Progress": "#388bfd",
-            "Done":        "#3fb950",
-            "In Review":   "#39d5f5",
-            "Blocked":     "#f78166",
-        }
-
-        def status_badge(name):
-            col = STATUS_CSS.get(name, "#8b949e")
-            return (f'<span style="display:inline-block;padding:2px 8px;border-radius:10px;'
-                    f'font-size:11px;font-weight:bold;background:{col}22;color:{col};'
-                    f'border:1px solid {col}55;">{name}</span>')
-
-        def priority_icon(name):
-            icons = {"Highest": "🔴", "High": "🟠", "Medium": "🟡",
-                     "Low": "🟢", "Lowest": "⚪"}
-            return icons.get(name, "•")
-
-        def bar(pct, colour="#388bfd", width=180):
-            filled = max(0, min(pct, 100))
-            return (f'<div style="display:inline-block;width:{width}px;height:8px;'
-                    f'background:#e0e0e0;border-radius:4px;vertical-align:middle;">'
-                    f'<div style="width:{filled}%;height:8px;background:{colour};'
-                    f'border-radius:4px;"></div></div>')
-
-        # ── Story rows ────────────────────────────────────────────────────────
-        story_rows = []
-        for iss in sorted(issues, key=lambda i: i.get("key", "")):
-            f      = iss.get("fields", {})
-            key    = iss.get("key", "")
-            summ   = f.get("summary", "")
-            status = (f.get("status") or {}).get("name", "—")
-            pri    = (f.get("priority") or {}).get("name", "—")
-            itype  = (f.get("issuetype") or {}).get("name", "—")
-            due    = (f.get("duedate") or "")[:10] or "—"
-            aobj   = f.get("assignee") or {}
-            aname  = aobj.get("displayName") or aobj.get("name") or "—"
-            pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
-            try:
-                pts_str = str(int(float(pts_raw))) if pts_raw is not None else "—"
-            except (TypeError, ValueError):
-                pts_str = "—"
-
-            key_cell = (f'<a href="{self._base_url}/browse/{key}" style="color:#388bfd;">{key}</a>'
-                        if self._base_url else key)
-
-            due_style = ""
-            if due != "—":
+            for iss in issues:
+                f      = iss.get("fields", {})
+                status = (f.get("status") or {}).get("name", "—")
+                status_counts[status] = status_counts.get(status, 0) + 1
+                pts_raw = next(
+                    (f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS)
+                     if f.get(k) is not None), None
+                )
                 try:
-                    days = (date.fromisoformat(due) - date.today()).days
-                    if days < 0:
-                        due_style = "color:#f78166;font-weight:bold;"
-                    elif days <= 3:
-                        due_style = "color:#e3b341;"
-                except ValueError:
-                    pass
+                    pts = int(float(pts_raw)) if pts_raw is not None else 0
+                except (TypeError, ValueError):
+                    pts = 0
+                total_pts += pts
+                if status == "Done":
+                    done_pts += pts
+                aobj  = f.get("assignee") or {}
+                aname = aobj.get("displayName") or aobj.get("name") or "Unassigned"
+                if aname not in assignee_stats:
+                    assignee_stats[aname] = {
+                        "total": 0, "done": 0, "pts": 0, "done_pts": 0, "stories": []
+                    }
+                assignee_stats[aname]["total"] += 1
+                assignee_stats[aname]["pts"]   += pts
+                if status == "Done":
+                    assignee_stats[aname]["done"]     += 1
+                    assignee_stats[aname]["done_pts"] += pts
+                assignee_stats[aname]["stories"].append(iss)
 
-            story_rows.append(
-                f"<tr>"
-                f"<td>{key_cell}</td>"
-                f"<td>{summ}</td>"
-                f"<td>{aname}</td>"
-                f"<td>{status_badge(status)}</td>"
-                f"<td style='text-align:center;'>{priority_icon(pri)} {pri}</td>"
-                f"<td style='text-align:center;'>{pts_str}</td>"
-                f"<td style='text-align:center;{due_style}'>{due}</td>"
-                f"<td style='text-align:center;'>{itype}</td>"
-                f"</tr>"
-            )
+            pct_done      = round(done_pts / total_pts * 100) if total_pts else 0
+            n_done        = status_counts.get("Done", 0)
+            n_total       = len(issues)
+            n_remaining   = n_total - n_done
+            remaining_pts = total_pts - done_pts
 
-        # ── Assignee rows ─────────────────────────────────────────────────────
-        assignee_rows = []
-        for aname, ast in sorted(assignee_stats.items(), key=lambda x: -x[1]["pts"]):
-            ap = round(ast["done_pts"] / ast["pts"] * 100) if ast["pts"] else 0
-            assignee_rows.append(
-                f"<tr>"
-                f"<td><strong>{aname}</strong></td>"
-                f"<td style='text-align:center;'>{ast['total']}</td>"
-                f"<td style='text-align:center;'>{ast['done']}</td>"
-                f"<td style='text-align:center;'>{ast['pts']}</td>"
-                f"<td style='text-align:center;'>{ast['done_pts']}</td>"
-                f"<td>{bar(ap)} &nbsp;{ap}%</td>"
-                f"</tr>"
-            )
+            start_str  = (self._sprint_detail.get("startDate") or "")[:10]
+            end_str    = (self._sprint_detail.get("endDate")   or "")[:10]
+            date_range = f"{start_str} \u2192 {end_str}" if start_str and end_str else ""
 
-        # ── Status breakdown ──────────────────────────────────────────────────
-        status_rows = "".join(
-            f"<tr><td>{status_badge(s)}</td>"
-            f"<td style='text-align:center;'>{c}</td>"
-            f"<td style='text-align:center;'>{round(c/n_total*100) if n_total else 0}%</td></tr>"
-            for s, c in sorted(status_counts.items(), key=lambda x: -x[1])
-        )
+            STATUS_CSS = {
+                "To Do":       ("#6e7681", "#f6f8fa"),
+                "In Progress": ("#388bfd", "#dbeafe"),
+                "Done":        ("#3fb950", "#dcfce7"),
+                "In Review":   ("#a371f7", "#f3e8ff"),
+                "Blocked":     ("#f78166", "#fff1ee"),
+            }
 
-        # ── Burndown chart (ideal vs simulated remaining) ─────────────────────
-        burndown_svg = self._build_burndown_svg(total_pts, done_pts, n_total, n_done)
-
-        td = "padding:8px 12px;border-bottom:1px solid #e0e0e0;"
-        th = ("padding:8px 12px;background:#f6f8fa;font-size:11px;letter-spacing:.5px;"
-              "text-transform:uppercase;border-bottom:2px solid #d0d7de;text-align:left;")
-
-        self._html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Sprint Report — {title}</title>
-<style>
-  body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-          color:#1f2328;background:#ffffff;margin:0;padding:32px; }}
-  h1   {{ font-size:22px;font-weight:700;margin:0 0 4px; }}
-  h2   {{ font-size:14px;font-weight:600;margin:28px 0 10px;color:#57606a;
-          text-transform:uppercase;letter-spacing:.8px; }}
-  .meta {{ font-size:12px;color:#57606a;margin-bottom:28px; }}
-  .stat-grid {{ display:flex;gap:20px;margin-bottom:28px;flex-wrap:wrap; }}
-  .stat-card {{ background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;
-                padding:16px 20px;min-width:130px; }}
-  .stat-card .val {{ font-size:28px;font-weight:700;color:#1f2328; }}
-  .stat-card .lbl {{ font-size:11px;color:#57606a;text-transform:uppercase;
-                     letter-spacing:.5px;margin-top:2px; }}
-  table {{ border-collapse:collapse;width:100%;font-size:13px; }}
-  th    {{ {th} }}
-  td    {{ {td} }}
-  tr:last-child td {{ border-bottom:none; }}
-  tr:hover td {{ background:#f6f8fa; }}
-  .progress-wrap {{ background:#e0e0e0;border-radius:4px;height:10px;
-                    width:100%;margin-top:6px; }}
-  .progress-fill {{ background:#3fb950;border-radius:4px;height:10px; }}
-</style>
-</head>
-<body>
-<h1>Sprint Report</h1>
-<div class="meta">{title} &nbsp;·&nbsp; Generated {today}</div>
-
-<div class="stat-grid">
-  <div class="stat-card"><div class="val">{n_total}</div><div class="lbl">Total Stories</div></div>
-  <div class="stat-card"><div class="val">{n_done}</div><div class="lbl">Done</div></div>
-  <div class="stat-card"><div class="val">{total_pts}</div><div class="lbl">Total Points</div></div>
-  <div class="stat-card"><div class="val">{done_pts}</div><div class="lbl">Points Done</div></div>
-  <div class="stat-card">
-    <div class="val">{pct_done}%</div>
-    <div class="lbl">Velocity</div>
-    <div class="progress-wrap"><div class="progress-fill" style="width:{pct_done}%;"></div></div>
-  </div>
-</div>
-
-<h2>Burndown</h2>
-{burndown_svg}
-
-<h2>Status Breakdown</h2>
-<table>
-  <tr><th>Status</th><th>Count</th><th>%</th></tr>
-  {status_rows}
-</table>
-
-<h2>By Assignee</h2>
-<table>
-  <tr>
-    <th>Name</th><th>Stories</th><th>Done</th>
-    <th>Pts</th><th>Pts Done</th><th>Progress</th>
-  </tr>
-  {"".join(assignee_rows)}
-</table>
-
-<h2>All Stories</h2>
-<table>
-  <tr>
-    <th>Key</th><th>Summary</th><th>Assignee</th><th>Status</th>
-    <th>Priority</th><th>Pts</th><th>Due</th><th>Type</th>
-  </tr>
-  {"".join(story_rows)}
-</table>
-</body>
-</html>"""
-
-        self._browser.setHtml(self._html)
-
-    def _build_burndown_svg(self, total_pts: int, done_pts: int,
-                            n_total: int, n_done: int) -> str:
-        """Generate a burndown SVG using real sprint start/end dates when available."""
-        W, H      = 700, 220
-        PAD_L     = 56
-        PAD_R     = 24
-        PAD_T     = 20
-        PAD_B     = 40
-        chart_w   = W - PAD_L - PAD_R
-        chart_h   = H - PAD_T - PAD_B
-
-        # Derive sprint duration from real dates if available
-        today       = date.today()
-        start_str   = (self._sprint_detail.get("startDate") or "")[:10]
-        end_str     = (self._sprint_detail.get("endDate")   or "")[:10]
-        try:
-            sprint_start = date.fromisoformat(start_str)
-            sprint_end   = date.fromisoformat(end_str)
-            sprint_days  = max(1, (sprint_end - sprint_start).days)
-            current_day  = max(0, min(sprint_days, (today - sprint_start).days))
-        except (ValueError, TypeError):
-            # Fallback: estimate from points done
-            sprint_days  = 14
-            pct_elapsed  = min(1.0, done_pts / total_pts) if total_pts else 0.0
-            current_day  = round(pct_elapsed * sprint_days)
-
-        remaining = max(0, total_pts - done_pts)
-
-        def px(day: int) -> int:
-            return PAD_L + round(day / sprint_days * chart_w)
-
-        def py(pts: int) -> int:
-            if total_pts == 0:
-                return PAD_T + chart_h
-            return PAD_T + chart_h - round(pts / total_pts * chart_h)
-
-        # Ideal burndown: straight line from (0, total) to (sprint_days, 0)
-        ideal_x1, ideal_y1 = px(0), py(total_pts)
-        ideal_x2, ideal_y2 = px(sprint_days), py(0)
-
-        # Actual: from (0, total) to (current_day, remaining)
-        actual_pts = [(0, total_pts), (current_day, remaining)]
-        actual_d   = " ".join(
-            f"{'M' if i == 0 else 'L'}{px(d)},{py(p)}"
-            for i, (d, p) in enumerate(actual_pts)
-        )
-
-        # X-axis tick labels (every 2 days, or every day for short sprints)
-        step = 1 if sprint_days <= 7 else 2
-        x_ticks = "".join(
-            f'<text x="{px(d)}" y="{PAD_T + chart_h + 18}" '
-            f'text-anchor="middle" fill="#57606a" font-size="10">{d}</text>'
-            for d in range(0, sprint_days + 1, step)
-        )
-        # Y-axis ticks
-        y_ticks = ""
-        if total_pts > 0:
-            for v in [0, total_pts // 4, total_pts // 2, total_pts * 3 // 4, total_pts]:
-                yy = py(v)
-                y_ticks += (
-                    f'<text x="{PAD_L - 8}" y="{yy + 4}" text-anchor="end" fill="#57606a" font-size="10">{v}</text>'
-                    f'<line x1="{PAD_L}" y1="{yy}" x2="{PAD_L + chart_w}" y2="{yy}" stroke="#e0e0e0" stroke-width="1"/>'
+            def status_badge(name):
+                fg, bg = STATUS_CSS.get(name, ("#8b949e", "#f6f8fa"))
+                return (
+                    f'<span style="display:inline-block;padding:3px 10px;border-radius:12px;'
+                    f'font-size:11px;font-weight:600;background:{bg};color:{fg};">'
+                    f'{name}</span>'
                 )
 
-        # Shaded area
-        shade_d = (
-            f"M{px(0)},{py(total_pts)} "
-            f"L{px(current_day)},{py(remaining)} "
-            f"L{px(current_day)},{PAD_T + chart_h} "
-            f"L{px(0)},{PAD_T + chart_h} Z"
-        )
+            def priority_badge(name):
+                cfg = {
+                    "Highest": ("#f78166", "\u25b2\u25b2"),
+                    "High":    ("#e3b341", "\u25b2"),
+                    "Medium":  ("#388bfd", "\u25cf"),
+                    "Low":     ("#3fb950", "\u25bc"),
+                    "Lowest":  ("#8b949e", "\u25bc\u25bc"),
+                }
+                colour, sym = cfg.get(name, ("#8b949e", "\u25cf"))
+                return (
+                    f'<span style="color:{colour};font-size:11px;" title="{name}">'
+                    f'{sym}</span>'
+                )
 
-        # Date footnote
-        date_note = ""
-        if start_str and end_str:
-            date_note = f" · {start_str} → {end_str}"
+            def mini_bar(pct, colour="#388bfd", width=140):
+                filled = max(0, min(pct, 100))
+                return (
+                    f'<div style="display:flex;align-items:center;gap:6px;">'
+                    f'<div style="flex:0 0 {width}px;height:6px;background:#e9ecef;'
+                    f'border-radius:3px;overflow:hidden;">'
+                    f'<div style="width:{filled}%;height:6px;background:{colour};'
+                    f'border-radius:3px;"></div></div>'
+                    f'<span style="font-size:11px;color:#57606a;white-space:nowrap;">'
+                    f'{pct}%</span></div>'
+                )
 
-        svg = f"""<div style="margin:16px 0;">
-<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg"
-     style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}" fill="#f6f8fa" rx="4"/>
-  {y_ticks}
-  <path d="{shade_d}" fill="#388bfd" fill-opacity="0.10"/>
-  <line x1="{ideal_x1}" y1="{ideal_y1}" x2="{ideal_x2}" y2="{ideal_y2}"
-        stroke="#d0d7de" stroke-width="2" stroke-dasharray="6,4"/>
-  <path d="{actual_d}" fill="none" stroke="#388bfd" stroke-width="2.5"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="{px(current_day)}" cy="{py(remaining)}" r="5"
-          fill="#388bfd" stroke="#ffffff" stroke-width="2"/>
-  <line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T + chart_h}"
-        stroke="#d0d7de" stroke-width="1"/>
-  <line x1="{PAD_L}" y1="{PAD_T + chart_h}"
-        x2="{PAD_L + chart_w}" y2="{PAD_T + chart_h}"
-        stroke="#d0d7de" stroke-width="1"/>
-  {x_ticks}
-  <text x="{PAD_L + chart_w // 2}" y="{H - 4}" text-anchor="middle"
-        fill="#57606a" font-size="11">Sprint Day</text>
-  <text x="12" y="{PAD_T + chart_h // 2}" text-anchor="middle"
-        fill="#57606a" font-size="11"
-        transform="rotate(-90,12,{PAD_T + chart_h // 2})">Points Remaining</text>
-  <line x1="{PAD_L + chart_w - 160}" y1="{PAD_T + 12}"
-        x2="{PAD_L + chart_w - 140}" y2="{PAD_T + 12}"
-        stroke="#d0d7de" stroke-width="2" stroke-dasharray="6,4"/>
-  <text x="{PAD_L + chart_w - 136}" y="{PAD_T + 16}" fill="#57606a" font-size="10">Ideal</text>
-  <line x1="{PAD_L + chart_w - 100}" y1="{PAD_T + 12}"
-        x2="{PAD_L + chart_w - 80}" y2="{PAD_T + 12}"
-        stroke="#388bfd" stroke-width="2.5"/>
-  <text x="{PAD_L + chart_w - 76}" y="{PAD_T + 16}" fill="#57606a" font-size="10">Actual</text>
-</svg>
-<p style="font-size:11px;color:#57606a;margin:4px 0 0;">
-  {total_pts} total pts · {done_pts} done · {remaining} remaining
-  · day {current_day} of {sprint_days}{date_note}
-</p>
-</div>"""
-        return svg
+            def ring(pct, colour="#3fb950", r=38):
+                circ = round(2 * 3.14159 * r, 1)
+                dash = round(pct / 100 * circ, 1)
+                return (
+                    f'<svg width="{r*2+8}" height="{r*2+8}" viewBox="0 0 {r*2+8} {r*2+8}" '
+                    f'style="transform:rotate(-90deg);">'
+                    f'<circle cx="{r+4}" cy="{r+4}" r="{r}" fill="none" '
+                    f'stroke="#e9ecef" stroke-width="6"/>'
+                    f'<circle cx="{r+4}" cy="{r+4}" r="{r}" fill="none" '
+                    f'stroke="{colour}" stroke-width="6" '
+                    f'stroke-dasharray="{dash} {circ}" stroke-linecap="round"/>'
+                    f'</svg>'
+                )
+
+            burndown_svg = self._build_burndown_svg(total_pts, done_pts, n_total, n_done)
+            velocity_ring = ring(pct_done)
+
+            stat_cards = f"""
+    <div class="stat-grid">
+      <div class="stat-card" style="border-left:4px solid #388bfd;">
+        <div class="stat-icon">&#128203;</div>
+        <div class="stat-val">{n_total}</div>
+        <div class="stat-lbl">Total Stories</div>
+        <div class="stat-sub">{n_remaining} remaining</div>
+      </div>
+      <div class="stat-card" style="border-left:4px solid #3fb950;">
+        <div class="stat-icon">&#9989;</div>
+        <div class="stat-val">{n_done}</div>
+        <div class="stat-lbl">Stories Done</div>
+        <div class="stat-sub">{round(n_done/n_total*100) if n_total else 0}% complete</div>
+      </div>
+      <div class="stat-card" style="border-left:4px solid #a371f7;">
+        <div class="stat-icon">&#9670;</div>
+        <div class="stat-val">{total_pts}</div>
+        <div class="stat-lbl">Total Points</div>
+        <div class="stat-sub">{remaining_pts} remaining</div>
+      </div>
+      <div class="stat-card" style="border-left:4px solid #3fb950;">
+        <div class="stat-icon">&#9889;</div>
+        <div class="stat-val">{done_pts}</div>
+        <div class="stat-lbl">Points Done</div>
+        <div class="stat-sub">&nbsp;</div>
+      </div>
+      <div class="stat-card" style="border-left:4px solid #e3b341;align-items:center;">
+        <div style="position:relative;display:inline-block;">
+          {velocity_ring}
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+                      font-size:14px;font-weight:700;color:#1f2328;">{pct_done}%</div>
+        </div>
+        <div class="stat-lbl" style="margin-top:6px;">Velocity</div>
+      </div>
+    </div>"""
+
+            status_bar_segs = ""
+            status_legend   = ""
+            for sname, cnt in sorted(status_counts.items(), key=lambda x: -x[1]):
+                fg, bg = STATUS_CSS.get(sname, ("#8b949e", "#e9ecef"))
+                pct = round(cnt / n_total * 100) if n_total else 0
+                if pct == 0:
+                    continue
+                status_bar_segs += (
+                    f'<div style="flex:{pct};background:{fg};height:100%;" '
+                    f'title="{sname}: {cnt} ({pct}%)"></div>'
+                )
+                status_legend += (
+                    f'<div style="display:flex;align-items:center;gap:6px;white-space:nowrap;">'
+                    f'<div style="width:10px;height:10px;border-radius:2px;background:{fg};'
+                    f'flex-shrink:0;"></div>'
+                    f'<span style="font-size:12px;color:#57606a;">{sname}</span>'
+                    f'<span style="font-size:12px;font-weight:600;color:#1f2328;">{cnt}</span>'
+                    f'<span style="font-size:11px;color:#8b949e;">({pct}%)</span>'
+                    f'</div>'
+                )
+            status_section = f"""
+    <div class="card">
+      <div class="card-title">Status Breakdown</div>
+      <div style="height:20px;border-radius:6px;overflow:hidden;display:flex;margin-bottom:14px;">
+        {status_bar_segs}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;">
+        {status_legend}
+      </div>
+    </div>"""
+
+            assignee_cards = ""
+            for aname, ast in sorted(assignee_stats.items(), key=lambda x: -x[1]["pts"]):
+                ap  = round(ast["done_pts"] / ast["pts"] * 100) if ast["pts"] else 0
+                sp_ = round(ast["done"] / ast["total"] * 100)   if ast["total"] else 0
+                initials = "".join(w[0].upper() for w in aname.split()[:2]) or "?"
+                assignee_cards += f"""
+    <div class="assignee-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <div style="width:36px;height:36px;border-radius:50%;background:#388bfd22;
+                    color:#388bfd;font-weight:700;font-size:13px;display:flex;
+                    align-items:center;justify-content:center;flex-shrink:0;">{initials}</div>
+        <div>
+          <div style="font-weight:600;font-size:13px;color:#1f2328;">{aname}</div>
+          <div style="font-size:11px;color:#57606a;">{ast['total']} stories &middot; {ast['pts']} pts</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#57606a;margin-bottom:4px;">Stories complete</div>
+      {mini_bar(sp_, "#3fb950")}
+      <div style="font-size:11px;color:#57606a;margin:8px 0 4px;">Points complete</div>
+      {mini_bar(ap, "#388bfd")}
+      <div style="display:flex;gap:16px;margin-top:10px;padding-top:10px;
+                  border-top:1px solid #f0f0f0;font-size:11px;">
+        <span><strong style="color:#3fb950;">{ast['done']}</strong>
+              <span style="color:#8b949e;">done</span></span>
+        <span><strong style="color:#388bfd;">{ast['done_pts']}</strong>
+              <span style="color:#8b949e;">pts done</span></span>
+        <span><strong style="color:#e3b341;">{ast['total']-ast['done']}</strong>
+              <span style="color:#8b949e;">remaining</span></span>
+      </div>
+    </div>"""
+
+            story_rows_html = ""
+            for iss in sorted(issues, key=lambda i: i.get("key", "")):
+                f      = iss.get("fields", {})
+                key    = iss.get("key", "")
+                summ   = f.get("summary", "")
+                status = (f.get("status") or {}).get("name", "&#8212;")
+                pri    = (f.get("priority") or {}).get("name", "&#8212;")
+                itype  = (f.get("issuetype") or {}).get("name", "&#8212;")
+                due    = (f.get("duedate") or "")[:10] or "&#8212;"
+                aobj   = f.get("assignee") or {}
+                aname  = aobj.get("displayName") or aobj.get("name") or "&#8212;"
+                pts_raw = next(
+                    (f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS)
+                     if f.get(k) is not None), None
+                )
+                try:
+                    pts_str = str(int(float(pts_raw))) if pts_raw is not None else "&#8212;"
+                except (TypeError, ValueError):
+                    pts_str = "&#8212;"
+
+                key_cell = (
+                    f'<a href="{self._base_url}/browse/{key}" '
+                    f'style="color:#388bfd;font-weight:600;text-decoration:none;">{key}</a>'
+                    if self._base_url else f'<strong>{key}</strong>'
+                )
+
+                row_style = ""
+                due_style = "color:#1f2328;"
+                if due not in ("&#8212;", ""):
+                    try:
+                        days = (date.fromisoformat(due) - date.today()).days
+                        if days < 0:
+                            row_style = "background:#fff5f5;"
+                            due_style = "color:#cf222e;font-weight:600;"
+                        elif days <= 3:
+                            due_style = "color:#9a6700;font-weight:600;"
+                    except ValueError:
+                        pass
+
+                story_rows_html += (
+                    f'<tr style="{row_style}">'
+                    f'<td style="white-space:nowrap;">{key_cell}</td>'
+                    f'<td style="max-width:320px;">{summ}</td>'
+                    f'<td style="white-space:nowrap;">{aname}</td>'
+                    f'<td>{status_badge(status)}</td>'
+                    f'<td style="text-align:center;">{priority_badge(pri)}</td>'
+                    f'<td style="text-align:center;font-weight:600;">{pts_str}</td>'
+                    f'<td style="text-align:center;{due_style}">{due}</td>'
+                    f'<td style="color:#57606a;font-size:11px;">{itype}</td>'
+                    f'</tr>'
+                )
+
+            self._html = f"""<!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <title>Sprint Report \u2014 {title}</title>
+    <style>
+      *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+      body {{
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        font-size: 13px; color: #1f2328; background: #f6f8fa;
+        padding: 32px 24px; line-height: 1.5;
+      }}
+      .report-header {{
+        background: linear-gradient(135deg, #1c2128 0%, #2d333b 100%);
+        color: #cdd9e5; border-radius: 12px; padding: 28px 32px; margin-bottom: 28px;
+      }}
+      .report-header h1 {{
+        font-size: 24px; font-weight: 700; color: #ffffff;
+        margin-bottom: 6px; letter-spacing: -0.3px;
+      }}
+      .report-header .sub {{ font-size: 15px; color: #8b949e; margin-top: 2px; }}
+      .report-header .meta {{
+        font-size: 12px; color: #8b949e; display: flex;
+        gap: 20px; flex-wrap: wrap; margin-top: 8px;
+      }}
+      .section-heading {{
+        font-size: 11px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 1px; color: #57606a; margin: 32px 0 14px;
+        display: flex; align-items: center; gap: 8px;
+      }}
+      .section-heading::after {{
+        content: ''; flex: 1; height: 1px; background: #d0d7de;
+      }}
+      .stat-grid {{ display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }}
+      .stat-card {{
+        background: #ffffff; border: 1px solid #d0d7de; border-radius: 10px;
+        padding: 18px 20px; min-width: 140px; flex: 1; display: flex;
+        flex-direction: column; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      }}
+      .stat-icon {{ font-size: 18px; margin-bottom: 8px; }}
+      .stat-val  {{ font-size: 30px; font-weight: 700; color: #1f2328; line-height: 1; }}
+      .stat-lbl  {{
+        font-size: 11px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: .5px; color: #57606a; margin-top: 4px;
+      }}
+      .stat-sub  {{ font-size: 11px; color: #8b949e; margin-top: 3px; }}
+      .card {{
+        background: #ffffff; border: 1px solid #d0d7de; border-radius: 10px;
+        padding: 20px 24px; margin-bottom: 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      }}
+      .card-title {{ font-size: 13px; font-weight: 700; color: #1f2328; margin-bottom: 14px; }}
+      .assignee-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 14px;
+      }}
+      .assignee-card {{
+        background: #ffffff; border: 1px solid #d0d7de; border-radius: 10px;
+        padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      }}
+      .table-wrap {{
+        background: #ffffff; border: 1px solid #d0d7de; border-radius: 10px;
+        overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      }}
+      table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
+      thead th {{
+        background: #f6f8fa; padding: 10px 14px; text-align: left;
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: .6px; color: #57606a; border-bottom: 1px solid #d0d7de;
+        position: sticky; top: 0;
+      }}
+      tbody td {{
+        padding: 10px 14px; border-bottom: 1px solid #f0f0f0; vertical-align: middle;
+      }}
+      tbody tr:last-child td {{ border-bottom: none; }}
+      tbody tr:hover td {{ background: #f6f8fa !important; }}
+      .burndown-card {{
+        background: #ffffff; border: 1px solid #d0d7de; border-radius: 10px;
+        padding: 20px 24px; margin-bottom: 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04);
+      }}
+      @media print {{
+        body {{ background: #fff; padding: 16px; font-size: 11px; }}
+        .report-header {{
+          background: #1c2128 !important;
+          -webkit-print-color-adjust: exact; print-color-adjust: exact;
+        }}
+        .stat-card, .card, .assignee-card, .table-wrap, .burndown-card {{
+          box-shadow: none; break-inside: avoid;
+        }}
+        .section-heading {{ margin-top: 20px; }}
+        thead th {{ position: static; }}
+      }}
+    </style>
+    </head>
+    <body>
+
+    <div class="report-header">
+      <h1>Sprint Report</h1>
+      <div class="sub">{title}</div>
+      <div class="meta">
+        {"<span>&#128197; " + date_range + "</span>" if date_range else ""}
+        <span>&#128197; Generated {today_str}</span>
+        <span>&#128202; {n_total} stories &middot; {total_pts} points</span>
+      </div>
+    </div>
+
+    <div class="section-heading">Summary</div>
+    {stat_cards}
+
+    <div class="section-heading">Burndown</div>
+    <div class="burndown-card">
+      <div class="card-title">Points Remaining Over Sprint</div>
+      {burndown_svg}
+    </div>
+
+    <div class="section-heading">Status</div>
+    {status_section}
+
+    <div class="section-heading">Team</div>
+    <div class="assignee-grid">{assignee_cards}</div>
+
+    <div class="section-heading">All Stories</div>
+    <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Key</th><th>Summary</th><th>Assignee</th><th>Status</th>
+        <th>Pri</th><th>Pts</th><th>Due</th><th>Type</th>
+      </tr></thead>
+      <tbody>{story_rows_html}</tbody>
+    </table>
+    </div>
+
+    </body>
+    </html>"""
+            self._browser.setHtml(self._html)
+
+        def _build_burndown_svg(self, total_pts: int, done_pts: int,
+                                n_total: int, n_done: int) -> str:
+            """Generate a burndown SVG using real sprint start/end dates when available."""
+            W, H    = 680, 240
+            PAD_L   = 52
+            PAD_R   = 20
+            PAD_T   = 24
+            PAD_B   = 44
+            chart_w = W - PAD_L - PAD_R
+            chart_h = H - PAD_T - PAD_B
+
+            today      = date.today()
+            start_str  = (self._sprint_detail.get("startDate") or "")[:10]
+            end_str    = (self._sprint_detail.get("endDate")   or "")[:10]
+            try:
+                sprint_start = date.fromisoformat(start_str)
+                sprint_end   = date.fromisoformat(end_str)
+                sprint_days  = max(1, (sprint_end - sprint_start).days)
+                current_day  = max(0, min(sprint_days, (today - sprint_start).days))
+            except (ValueError, TypeError):
+                sprint_days = 14
+                pct_elapsed = min(1.0, done_pts / total_pts) if total_pts else 0.0
+                current_day = round(pct_elapsed * sprint_days)
+                start_str   = ""
+                end_str     = ""
+
+            remaining = max(0, total_pts - done_pts)
+
+            def px(day):
+                return PAD_L + round(day / sprint_days * chart_w)
+
+            def py(pts):
+                if total_pts == 0:
+                    return PAD_T + chart_h
+                return PAD_T + chart_h - round(pts / total_pts * chart_h)
+
+            ideal_shade = (
+                f"M{px(0)},{py(total_pts)} L{px(sprint_days)},{py(0)} "
+                f"L{px(sprint_days)},{PAD_T + chart_h} L{px(0)},{PAD_T + chart_h} Z"
+            )
+            actual_shade = (
+                f"M{px(0)},{py(total_pts)} L{px(current_day)},{py(remaining)} "
+                f"L{px(current_day)},{PAD_T + chart_h} L{px(0)},{PAD_T + chart_h} Z"
+            )
+
+            grid = ""
+            step = 1 if sprint_days <= 7 else 2
+            for d in range(0, sprint_days + 1, step):
+                gx = px(d)
+                grid += (
+                    f'<line x1="{gx}" y1="{PAD_T}" x2="{gx}" y2="{PAD_T + chart_h}" '
+                    f'stroke="#f0f0f0" stroke-width="1"/>'
+                )
+            for i in range(6):
+                v  = round(total_pts * i / 5) if total_pts else 0
+                gy = py(v)
+                grid += (
+                    f'<line x1="{PAD_L}" y1="{gy}" x2="{PAD_L + chart_w}" y2="{gy}" '
+                    f'stroke="#e9ecef" stroke-width="1"/>'
+                    f'<text x="{PAD_L - 8}" y="{gy + 4}" text-anchor="end" '
+                    f'fill="#8b949e" font-size="10" font-family="sans-serif">{v}</text>'
+                )
+
+            x_labels = "".join(
+                f'<text x="{px(d)}" y="{PAD_T + chart_h + 16}" text-anchor="middle" '
+                f'fill="#8b949e" font-size="10" font-family="sans-serif">{d}</text>'
+                for d in range(0, sprint_days + 1, step)
+            )
+
+            ideal_at_today = (
+                total_pts - round(total_pts * current_day / sprint_days)
+                if sprint_days else total_pts
+            )
+            diff = ideal_at_today - remaining
+            if diff > 0:
+                callout_text  = f"\u25b2 {diff} pts ahead"
+                callout_color = "#3fb950"
+            elif diff < 0:
+                callout_text  = f"\u25bc {abs(diff)} pts behind"
+                callout_color = "#f78166"
+            else:
+                callout_text  = "On track"
+                callout_color = "#8b949e"
+
+            callout_x      = px(current_day)
+            callout_anchor = "middle"
+            if callout_x < PAD_L + 60:
+                callout_anchor = "start"
+            elif callout_x > PAD_L + chart_w - 60:
+                callout_anchor = "end"
+
+            callout = (
+                f'<text x="{callout_x}" y="{py(remaining) - 14}" '
+                f'text-anchor="{callout_anchor}" fill="{callout_color}" '
+                f'font-size="11" font-weight="bold" font-family="sans-serif">'
+                f'{callout_text}</text>'
+            )
+
+            date_note = f" \u00b7 {start_str} \u2192 {end_str}" if start_str and end_str else ""
+
+            return f"""<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg"
+         style="display:block;max-width:100%;">
+      <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}"
+            fill="#fafbfc" rx="4" ry="4"/>
+      {grid}
+      <path d="{ideal_shade}" fill="#3fb950" fill-opacity="0.05"/>
+      <path d="{actual_shade}" fill="#388bfd" fill-opacity="0.12"/>
+      <line x1="{px(0)}" y1="{py(total_pts)}" x2="{px(sprint_days)}" y2="{py(0)}"
+            stroke="#3fb950" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.7"/>
+      <polyline points="{px(0)},{py(total_pts)} {px(current_day)},{py(remaining)}"
+                fill="none" stroke="#388bfd" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="{px(current_day)}" cy="{py(remaining)}" r="6"
+              fill="#388bfd" stroke="#ffffff" stroke-width="2.5"/>
+      {callout}
+      <line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T + chart_h}"
+            stroke="#d0d7de" stroke-width="1"/>
+      <line x1="{PAD_L}" y1="{PAD_T + chart_h}"
+            x2="{PAD_L + chart_w}" y2="{PAD_T + chart_h}" stroke="#d0d7de" stroke-width="1"/>
+      {x_labels}
+      <text x="{PAD_L + chart_w // 2}" y="{H - 4}" text-anchor="middle"
+            fill="#8b949e" font-size="11" font-family="sans-serif">Sprint Day</text>
+      <text x="10" y="{PAD_T + chart_h // 2}" text-anchor="middle"
+            fill="#8b949e" font-size="11" font-family="sans-serif"
+            transform="rotate(-90,10,{PAD_T + chart_h // 2})">Pts Remaining</text>
+      <line x1="{PAD_L + chart_w - 148}" y1="{PAD_T + 10}"
+            x2="{PAD_L + chart_w - 130}" y2="{PAD_T + 10}"
+            stroke="#3fb950" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.7"/>
+      <text x="{PAD_L + chart_w - 126}" y="{PAD_T + 14}"
+            fill="#57606a" font-size="10" font-family="sans-serif">Ideal</text>
+      <line x1="{PAD_L + chart_w - 90}" y1="{PAD_T + 10}"
+            x2="{PAD_L + chart_w - 72}" y2="{PAD_T + 10}"
+            stroke="#388bfd" stroke-width="2.5"/>
+      <text x="{PAD_L + chart_w - 68}" y="{PAD_T + 14}"
+            fill="#57606a" font-size="10" font-family="sans-serif">Actual</text>
+    </svg>
+    <p style="font-size:11px;color:#8b949e;margin:8px 0 0;font-family:sans-serif;">
+      {total_pts} total pts \u00b7 {done_pts} done \u00b7 {remaining} remaining
+      \u00b7 day {current_day} of {sprint_days}{date_note}
+    </p>"""
+
 
     def _save_html(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -4214,25 +4418,27 @@ class KanbanColumn(QFrame):
 
 class KanbanBoardWidget(QWidget):
     """Full Kanban board: one column per status, drag-and-drop between them."""
-    story_selected = pyqtSignal(str)        # issue key clicked on card
+    story_selected    = pyqtSignal(str)        # issue key clicked on card
     transition_requested = pyqtSignal(str, str)  # (key, new_status_name)
-    new_story_requested = pyqtSignal()
+    new_story_requested  = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._columns: dict[str, KanbanColumn] = {}
-        self._sp_field = ""
-        self._last_issues: list = []   # cache so tab switch doesn't re-render
+        self._sp_field     = ""
+        self._last_issues: list = []   # cache — skip re-render when unchanged
+        self._all_issues:  list = []   # full set before filter
+        self._base_url     = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
-        # Board header
+        # ── Board header ──────────────────────────────────────────────────────
         hdr = QHBoxLayout()
-        title = QLabel("◈  KANBAN BOARD")
-        title.setObjectName("heading")
-        hdr.addWidget(title)
+        self._title_lbl = QLabel("◈  ACTIVE SPRINT")
+        self._title_lbl.setObjectName("heading")
+        hdr.addWidget(self._title_lbl)
         hdr.addStretch()
         new_btn = QPushButton("＋  New Story")
         new_btn.setObjectName("toolbar_btn")
@@ -4243,7 +4449,52 @@ class KanbanBoardWidget(QWidget):
         hdr.addWidget(self._status_lbl)
         layout.addLayout(hdr)
 
-        # Columns row
+        # ── Filter bar ────────────────────────────────────────────────────────
+        filter_bar = QFrame()
+        filter_bar.setStyleSheet(
+            f"QFrame {{ background: transparent; border-bottom: 1px solid {BORDER}; "
+            f"padding-bottom: 4px; }}"
+        )
+        fb = QHBoxLayout(filter_bar)
+        fb.setContentsMargins(0, 0, 0, 6)
+        fb.setSpacing(8)
+
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("🔍  Filter cards by summary or key…")
+        self._filter_edit.setMaximumWidth(260)
+        self._filter_edit.textChanged.connect(self._apply_filters)
+        fb.addWidget(self._filter_edit)
+
+        fb.addWidget(QLabel("Assignee:"))
+        self._assignee_combo = QComboBox()
+        self._assignee_combo.setMinimumWidth(140)
+        self._assignee_combo.addItem("All", None)
+        self._assignee_combo.currentIndexChanged.connect(self._apply_filters)
+        fb.addWidget(self._assignee_combo)
+
+        fb.addWidget(QLabel("Priority:"))
+        self._priority_combo = QComboBox()
+        self._priority_combo.setMinimumWidth(110)
+        self._priority_combo.addItem("All", None)
+        for p in ["Highest", "High", "Medium", "Low", "Lowest"]:
+            self._priority_combo.addItem(p, p)
+        self._priority_combo.currentIndexChanged.connect(self._apply_filters)
+        fb.addWidget(self._priority_combo)
+
+        self._clear_btn = QPushButton("✕  Clear")
+        self._clear_btn.setObjectName("toolbar_btn")
+        self._clear_btn.setFixedHeight(26)
+        self._clear_btn.clicked.connect(self._clear_filters)
+        fb.addWidget(self._clear_btn)
+        fb.addStretch()
+
+        self._filter_count_lbl = QLabel("")
+        self._filter_count_lbl.setObjectName("dim")
+        fb.addWidget(self._filter_count_lbl)
+
+        layout.addWidget(filter_bar)
+
+        # ── Columns row ───────────────────────────────────────────────────────
         cols_widget = QWidget()
         cols_layout = QHBoxLayout(cols_widget)
         cols_layout.setContentsMargins(0, 0, 0, 0)
@@ -4263,37 +4514,118 @@ class KanbanBoardWidget(QWidget):
         scroll.setStyleSheet("QScrollArea { border: none; }")
         layout.addWidget(scroll, 1)
 
+    # ── Public API ────────────────────────────────────────────────────────────
+    def set_sprint_name(self, name: str):
+        """Update the board title to reflect the active sprint name."""
+        self._title_lbl.setText(f"◈  {name.upper()}" if name else "◈  ACTIVE SPRINT")
+
+    def set_base_url(self, url: str):
+        self._base_url = url
+
     def populate(self, issues: list, sp_field: str, force: bool = False):
         """Populate board. Skips re-render if issues unchanged and force=False."""
         if not force and issues is self._last_issues and sp_field == self._sp_field:
             return
         self._last_issues = issues
+        self._all_issues  = issues
         self._sp_field    = sp_field
+        self._rebuild_assignee_combo(issues)
+        self._render_issues(issues)
 
+    def refresh(self, issues: list, sp_field: str):
+        """Force re-render (used after a transition)."""
+        self.populate(issues, sp_field, force=True)
+
+    # ── Filter logic ──────────────────────────────────────────────────────────
+    def _rebuild_assignee_combo(self, issues: list):
+        self._assignee_combo.blockSignals(True)
+        current = self._assignee_combo.currentData()
+        self._assignee_combo.clear()
+        self._assignee_combo.addItem("All", None)
+        seen = {}
+        for iss in issues:
+            aobj = (iss.get("fields") or {}).get("assignee") or {}
+            name = aobj.get("displayName") or aobj.get("name") or ""
+            uid  = aobj.get("accountId") or aobj.get("name") or ""
+            if uid and uid not in seen:
+                seen[uid] = name
+                self._assignee_combo.addItem(name or uid, uid)
+        # Restore previous selection if still present
+        for i in range(self._assignee_combo.count()):
+            if self._assignee_combo.itemData(i) == current:
+                self._assignee_combo.setCurrentIndex(i)
+                break
+        self._assignee_combo.blockSignals(False)
+
+    def _apply_filters(self):
+        term     = self._filter_edit.text().lower().strip()
+        assignee = self._assignee_combo.currentData()
+        priority = self._priority_combo.currentData()
+
+        filtered = []
+        for iss in self._all_issues:
+            f = iss.get("fields") or {}
+            if term:
+                key     = iss.get("key", "").lower()
+                summary = f.get("summary", "").lower()
+                if term not in key and term not in summary:
+                    continue
+            if assignee:
+                aobj = f.get("assignee") or {}
+                uid  = aobj.get("accountId") or aobj.get("name") or ""
+                if uid != assignee:
+                    continue
+            if priority:
+                pri = (f.get("priority") or {}).get("name", "")
+                if pri != priority:
+                    continue
+            filtered.append(iss)
+
+        self._render_issues(filtered)
+        total    = len(self._all_issues)
+        showing  = len(filtered)
+        is_filtered = term or assignee or priority
+        self._filter_count_lbl.setText(
+            f"Showing {showing} of {total}" if is_filtered else ""
+        )
+
+    def _clear_filters(self):
+        self._filter_edit.blockSignals(True)
+        self._assignee_combo.blockSignals(True)
+        self._priority_combo.blockSignals(True)
+        self._filter_edit.clear()
+        self._assignee_combo.setCurrentIndex(0)
+        self._priority_combo.setCurrentIndex(0)
+        self._filter_edit.blockSignals(False)
+        self._assignee_combo.blockSignals(False)
+        self._priority_combo.blockSignals(False)
+        self._render_issues(self._all_issues)
+        self._filter_count_lbl.setText("")
+
+    def _render_issues(self, issues: list):
         for col in self._columns.values():
             col.clear_cards()
 
         ungrouped = 0
         for issue in issues:
             status = (issue.get("fields", {}).get("status") or {}).get("name", "")
-            col = self._columns.get(status)
+            col    = self._columns.get(status)
             if col is None:
                 col = self._columns.get("To Do")
                 ungrouped += 1
             if col:
-                card = KanbanCard(issue, sp_field)
-                card.clicked.connect(self.story_selected.emit)
+                card = KanbanCard(issue, self._sp_field)
+                card.clicked.connect(self._on_card_clicked)
                 col.add_card(card)
 
-        total = len(issues)
+        total = len(self._all_issues)
         self._status_lbl.setText(
-            f"{total} stories across {len(KANBAN_STATUSES)} columns"
+            f"{total} stories"
             + (f" ({ungrouped} in unknown status → To Do)" if ungrouped else "")
         )
 
-    def refresh(self, issues: list, sp_field: str):
-        """Force re-render (used after a transition)."""
-        self.populate(issues, sp_field, force=True)
+    def _on_card_clicked(self, key: str):
+        self.story_selected.emit(key)
 
     def _on_card_dropped(self, key: str, new_status: str):
         self.transition_requested.emit(key, new_status)
@@ -4379,7 +4711,57 @@ class BacklogWidget(QWidget):
         self._table.setShowGrid(False)
         self._table.setSortingEnabled(True)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table, 1)
+        self._base_url = ""
+
+    def set_base_url(self, url: str):
+        self._base_url = url
+
+    def _show_context_menu(self, pos):
+        row = self._table.rowAt(pos.y())
+        if row < 0:
+            return
+        key_item = self._table.item(row, 0)
+        if not key_item:
+            return
+        key = key_item.text()
+
+        selected_rows = list({idx.row() for idx in self._table.selectedIndexes()})
+        selected_keys = [
+            self._table.item(r, 0).text()
+            for r in selected_rows
+            if self._table.item(r, 0)
+        ]
+        if not selected_keys:
+            selected_keys = [key]
+
+        menu = QMenu(self)
+        open_action = menu.addAction("⎋  Open in Jira")
+        open_action.setEnabled(bool(self._base_url) and len(selected_keys) == 1)
+        menu.addSeparator()
+        copy_key = menu.addAction(
+            "⎘  Copy Key" if len(selected_keys) == 1
+            else f"⎘  Copy {len(selected_keys)} Keys"
+        )
+        menu.addSeparator()
+        move_action = menu.addAction(
+            "⇧  Move to Sprint" if len(selected_keys) == 1
+            else f"⇧  Move {len(selected_keys)} Stories to Sprint"
+        )
+        move_action.setEnabled(self._sprint_combo.currentData() is not None)
+
+        chosen = menu.exec(self._table.viewport().mapToGlobal(pos))
+        if chosen == open_action:
+            webbrowser.open(f"{self._base_url}/browse/{key}")
+        elif chosen == copy_key:
+            QApplication.clipboard().setText(", ".join(selected_keys))
+        elif chosen == move_action:
+            sprint_id = self._sprint_combo.currentData()
+            if sprint_id:
+                for k in selected_keys:
+                    self.move_to_sprint.emit(k, sprint_id)
 
     def set_sprints(self, sprints: list):
         """Update the sprint combo for move-to-sprint."""
@@ -4609,9 +4991,9 @@ class MainWindow(QMainWindow):
         self._tab_stories_btn.setToolTip("Stories list view  (Alt+1)")
         self._tab_stories_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
         tb_layout.addWidget(self._tab_stories_btn)
-        self._tab_kanban_btn = QPushButton("⊞  Kanban")
+        self._tab_kanban_btn = QPushButton("⊞  Active Sprint")
         self._tab_kanban_btn.setObjectName("toolbar_btn")
-        self._tab_kanban_btn.setToolTip("Kanban board view  (Alt+2)")
+        self._tab_kanban_btn.setToolTip("Active sprint board view  (Alt+2)")
         self._tab_kanban_btn.clicked.connect(lambda: self._switch_to_kanban())
         tb_layout.addWidget(self._tab_kanban_btn)
         self._tab_backlog_btn = QPushButton("☰  Backlog")
@@ -4900,7 +5282,7 @@ class MainWindow(QMainWindow):
         self.kanban_widget.new_story_requested.connect(
             lambda: self.new_story_btn.click() if self.new_story_btn.isEnabled() else None
         )
-        self.tabs.addTab(self.kanban_widget, "⊞  KANBAN")
+        self.tabs.addTab(self.kanban_widget, "⊞  ACTIVE SPRINT")
 
         # ── Backlog tab ───────────────────────────────────────────────────────
         backlog_outer = QWidget()
@@ -5930,7 +6312,8 @@ class MainWindow(QMainWindow):
         self.compare_combo.clear()
         self.compare_btn.setEnabled(False)
         self.sprint_mgr_btn.setEnabled(False)
-        self.assignee_filter_combo.setEnabled(False)
+        self.tabs.setTabText(1, "⊞  ACTIVE SPRINT")
+        self.kanban_widget.set_sprint_name("")
         self.assignee_filter_combo.clear()
         self.edit_panel.current_key = None
         self.edit_panel.title_lbl.setText("Select a story to edit")
@@ -6369,6 +6752,13 @@ class MainWindow(QMainWindow):
         self.archive_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
         self.load_backlog_btn.setEnabled(True)
+        # Update Kanban board title with active sprint name
+        sprint_name = self.sprint_combo.currentText()
+        self.kanban_widget.set_sprint_name(sprint_name)
+        self.kanban_widget.set_base_url(self.edit_panel._base_url)
+        self.backlog_widget.set_base_url(self.edit_panel._base_url)
+        # Update tab label to show sprint name
+        self.tabs.setTabText(1, f"⊞  {sprint_name}" if sprint_name else "⊞  ACTIVE SPRINT")
         # Refresh Kanban only if already visible (avoid re-render on hidden tab)
         if self.tabs.currentIndex() == 1:
             self.kanban_widget.populate(issues, self._sp_field, force=True)
