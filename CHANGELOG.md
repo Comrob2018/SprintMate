@@ -1,4 +1,20 @@
 # SprintMate Changelog
+## [2.24.0] — 2026-06-23
+### Features
+* **Configure moved to Help menu.** The **⚙ Configure** button has been removed from the top bar. Configure is now the first item in the **Help** menu alongside Keyboard Shortcuts, Check for Updates, and About SprintMate. The top bar is now: Switch Instance · Stories · Active Sprint · Backlog · Reports · Refresh.
+* **Reports tab.** A new **📊 Reports** tab (fourth tab, `Alt+4`, top-bar **📊 Reports** button) replaces the Sprint Report, Velocity, and Compare controls that were scattered across the Stories toolbar. The tab contains:
+  * A **SPRINT** dropdown pre-populated with all sprints on the board, with the active sprint pre-selected.
+  * **📊 Sprint Report** — generates the full dashboard-style HTML report inline in a `QTextBrowser` inside the tab. No separate dialog window.
+  * **👤 People Report** — generates the people report inline, using all assignees from the currently loaded sprint.
+  * **📈 Velocity** — generates a clean velocity history table inline (last 8 closed sprints by default).
+  * **⇆ Compare** dropdown and button — moved from the Stories toolbar row 1.
+  * **⬇ Save HTML** button (right-aligned) — enabled after any report is generated, saves the current report to a file.
+  * Reports render directly into the tab browser; `SprintReportDialog` is reused internally for its `_build_report` and `_build_people_report` methods without showing the dialog.
+* **? help button removed from toolbar.** The keyboard shortcut reference is now accessible via **Help → Keyboard Shortcuts…** or the `?` key. The button is no longer needed in the toolbar.
+* **Stories toolbar decluttered.** Row 2 now contains: New Story, Bulk Create, Import, Export, Archive, Bulk Edit, Assignee filter, and search box. Sprint Report, Velocity, and ? have been removed; Compare has moved to the Reports tab.
+
+---
+
 ## [2.23.1] — 2026-06-23
 ### Bug Fixes & Polish
 * **`_copy_key` and `_undo_save` restored.** Both methods were lost during a prior edit that merged the body of `_undo_save` into `_copy_key` with no `def` header, causing an `AttributeError` on startup. Both are now separate, correctly-defined methods.
