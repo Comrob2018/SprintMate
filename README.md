@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.19.0
+# SprintMate  ◈  v2.20.0
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, generate sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -302,9 +302,19 @@ After any successful operation the sprint dropdown in the main window reloads au
 
 ### Kanban board
 
-Click **⊞ Kanban** in the top bar (or press `Alt+2`) to switch to the Kanban board view. Stories are displayed as cards in five columns: **To Do**, **In Progress**, **In Review**, **Done**, and **Blocked**.
+Click **⊞ Active Sprint** in the top bar (or press `Alt+2`) to switch to the active sprint board view. The board heading and tab label both reflect the loaded sprint name (e.g. `⊞  Sprint 42`). They reset to `⊞  ACTIVE SPRINT` when no sprint is loaded.
 
-Each card shows the issue key, summary, assignee, and story points. The left border colour corresponds to the story's status.
+Stories are displayed as cards in five columns: **To Do**, **In Progress**, **In Review**, **Done**, and **Blocked**. Each card shows the issue key, summary, assignee, and story points. The left border colour corresponds to the story's status.
+
+**Filtering** — a filter bar sits below the board header with three controls that work together in real time:
+
+| Control | Filters by |
+|---|---|
+| Text search | Issue key or summary substring |
+| Assignee | Team member (populated from loaded issues; selection preserved on refresh) |
+| Priority | Highest / High / Medium / Low / Lowest |
+
+A **✕ Clear** button resets all three at once. A "Showing N of M" label appears whenever any filter is active.
 
 **Drag a card** to a different column to trigger a Jira status transition. SprintMate uses fuzzy matching to find the correct transition — see [Bulk status transitions](#bulk-status-transitions) for the matching logic. If no match is found, the error message lists all available transitions and the card stays in its original column.
 
@@ -320,7 +330,15 @@ Click **☰ Backlog** in the top bar (or press `Alt+3`) to switch to the Backlog
 
 Results display in a sortable, filterable table with columns for KEY, SUMMARY, ASSIGNEE, PRIORITY, PTS, TYPE, and DUE DATE. Use the filter box at the top to search live across all columns.
 
-**Move to Sprint** — select one or more backlog stories (multi-select with `Shift` or `Ctrl`), choose a target sprint from the dropdown (the active sprint is pre-selected), and click **⇧ Move**. Moved stories are removed from the backlog table immediately.
+**Right-clicking any row** opens a context menu. Menu items adapt for single vs multi-selection:
+
+| Action | Single selection | Multi-selection |
+|---|---|---|
+| **⎋ Open in Jira** | Opens the issue in your browser | Disabled |
+| **⎘ Copy Key** | Copies the key to the clipboard | Copies N keys comma-separated |
+| **⇧ Move to Sprint** | Moves the story to the selected sprint | Moves all selected stories |
+
+**Move to Sprint** — you can also select one or more backlog stories, choose a target sprint from the dropdown (the active sprint is pre-selected), and click **⇧ Move**. Moved stories are removed from the backlog table immediately.
 
 **Export CSV** — click **⬇ Export CSV** to save all loaded backlog items to a CSV file (key, summary, assignee, priority, story points, issue type, due date).
 
@@ -356,7 +374,7 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | `Ctrl+Shift+C` | Copy full issue as a CSV-ready row |
 | `Ctrl+Shift+M` | Copy selected row as Markdown |
 | `Alt+1` | Switch to Stories view |
-| `Alt+2` | Switch to Kanban view |
+| `Alt+2` | Switch to Active Sprint board view |
 | `Alt+3` | Switch to Backlog view |
 
 ### Table (when the story table has focus)
@@ -382,7 +400,7 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | **⇄ Switch Instance** | Toggle between Primary and Secondary |
 | **↺ Refresh** | Reload the current sprint |
 | **◈ Stories** | Switch to the Stories table view |
-| **⊞ Kanban** | Switch to the Kanban board view |
+| **⊞ Active Sprint** | Switch to the active sprint board view |
 | **☰ Backlog** | Switch to the Backlog view |
 | **⊕ Sprint** | Open the Sprint Manager (create, start, rename, close) |
 
@@ -460,14 +478,15 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 
 ---
 
-### How to use the Kanban board
+### How to use the active sprint board
 
 1. Load a sprint.
-2. Click **⊞ Kanban** in the top bar (or press `Alt+2`).
+2. Click **⊞ Active Sprint** in the top bar (or press `Alt+2`). The tab and board heading show the sprint name.
 3. Stories appear as cards in their current status column.
-4. **Drag a card** to a new column to trigger a Jira status transition.
-5. **Click a card** to jump back to the Stories tab with that story selected.
-6. Use **＋ New Story** in the board header to create a new story without leaving the Kanban view.
+4. **Filter cards** using the filter bar: type in the search box to match by key or summary, choose an assignee, or choose a priority. All three filters work together in real time. Click **✕ Clear** to reset.
+5. **Drag a card** to a new column to trigger a Jira status transition.
+6. **Click a card** to jump back to the Stories tab with that story selected.
+7. Use **＋ New Story** in the board header to create a story without leaving the board.
 
 ---
 
@@ -477,9 +496,10 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 2. Click **☰ Backlog** in the top bar (or press `Alt+3`).
 3. Click **↺ Load Backlog** to fetch all unsprinted open stories for the current project.
 4. Use the filter box to search, or click any column header to sort.
-5. To move stories into a sprint: select one or more rows, choose a sprint from the **Move to sprint** dropdown, and click **⇧ Move**.
-6. To export the backlog: click **⬇ Export CSV**.
-7. Clicking a story that also exists in the active sprint switches to the Stories tab and highlights it.
+5. **Right-click any row** for quick actions: Open in Jira, Copy Key, or Move to Sprint.
+6. To move stories into a sprint: select one or more rows, choose a sprint from the **Move to sprint** dropdown, and click **⇧ Move** (or use the right-click menu).
+7. To export the backlog: click **⬇ Export CSV**.
+8. Clicking a story that also exists in the active sprint switches to the Stories tab and highlights it.
 
 ---
 
