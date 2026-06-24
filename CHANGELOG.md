@@ -1,4 +1,10 @@
 # SprintMate Changelog
+## [2.21.1] — 2026-06-23
+### Bug Fixes
+* **Quick-add issue type selection.** The quick-add bar previously always created issues using the first type returned by Jira (`types[0]`), with no way for the user to choose. A type combo is now placed to the right of the summary field. It is populated from the same issue type list as the edit panel when a project loads, with "Story" pre-selected if present, otherwise the first available type. The status message during creation now reflects the chosen type (e.g. "Creating Bug…"). The combo is disabled and cleared when the sprint view resets. A fallback to the edit panel's first type is retained if the combo is somehow empty.
+
+---
+
 ## [2.21.0] — 2026-06-23
 ### Features
 * **Professional sprint report redesign.** `_build_report` and `_build_burndown_svg` were fully rewritten. The report is now a dashboard-style HTML document rendered on a light grey background with white card surfaces, subtle box shadows, and a consistent font stack (`-apple-system`, `Segoe UI`, `Helvetica`, `Arial`).
