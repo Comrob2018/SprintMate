@@ -1,4 +1,18 @@
 # SprintMate Changelog
+## [2.25.0] — 2026-06-23
+### Features
+* **Reports tab restructured with five sub-tabs.** The single `QTextBrowser` that previously swapped content on each button click has been replaced with a `QTabWidget` inside the Reports tab. Each sub-tab persists its content independently — switching between them does not lose a generated report. The five sub-tabs are:
+  * **📊 Sprint Report** — full dashboard HTML report (dark header, stat cards, burndown, status bar, team grid, story table). The burndown chart remains here as before.
+  * **👤 People Report** — per-assignee breakdown using the current sprint's assignees.
+  * **📈 Velocity** — `QSvgWidget` bar chart (committed vs completed per sprint) above a `QTableWidget` summary. Scales natively with the window. Falls back gracefully if `PyQt6-Qt6-Svg` is not installed.
+  * **⇆ Compare** — sprint compare results now render an HTML summary (added/changed/removed stat pills, full diff table with colour-coded change types) into this sub-tab. The app switches to it automatically after comparing.
+  * **📉 Burndown** — new dedicated burndown chart sub-tab. Clicking **📉 Burndown** in the Reports toolbar generates a standalone view of the active sprint's burndown chart with a stat strip showing total points, done, remaining, completion %, and stories done. Reuses `SprintReportDialog._build_burndown_svg` so the chart is identical to the one inside the Sprint Report. The burndown inside Sprint Report is unchanged.
+* **`QSvgWidget` for velocity chart.** The velocity bar chart now uses `PyQt6.QtSvgWidgets.QSvgWidget` loaded with `QByteArray(svg.encode())` instead of the previous `QSvgRenderer → QPixmap → QLabel` approach. The chart scales crispy at any window size because `QSvgWidget` renders SVG natively rather than pre-rasterising to a fixed resolution.
+* **Save HTML reads from active sub-tab.** `_reports_save_html` now reads from `_reports_html_map[current_sub_tab_index]` so it always saves the report that is currently visible, not whichever was generated last.
+* **Reports tab background fixed.** The `QTextBrowser` background was previously hardcoded to `#ffffff`, clashing with the dark app theme. All report browsers now use `DARK_BG` for the widget background while the report HTML content retains its own light background inside the document area.
+
+---
+
 ## [2.24.0] — 2026-06-23
 ### Features
 * **Configure moved to Help menu.** The **⚙ Configure** button has been removed from the top bar. Configure is now the first item in the **Help** menu alongside Keyboard Shortcuts, Check for Updates, and About SprintMate. The top bar is now: Switch Instance · Stories · Active Sprint · Backlog · Reports · Refresh.
