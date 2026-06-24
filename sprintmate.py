@@ -4786,6 +4786,7 @@ class BacklogWidget(QWidget):
     """Shows stories not assigned to any sprint (backlog items)."""
     story_selected   = pyqtSignal(str)
     move_to_sprint   = pyqtSignal(str, int)   # (issue_key, sprint_id)
+    load_requested   = pyqtSignal()            # ask MainWindow to load backlog
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4794,8 +4795,47 @@ class BacklogWidget(QWidget):
         self._sprints: list = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ── Load bar (project / board selector) ───────────────────────────────
+        self._load_bar = QFrame()
+        self._load_bar.setStyleSheet(
+            f"QFrame {{ background: {PANEL_BG}; border-bottom: 1px solid {BORDER}; }}"
+        )
+        lb = QHBoxLayout(self._load_bar)
+        lb.setContentsMargins(16, 8, 16, 8)
+        lb.setSpacing(8)
+
+        lb.addWidget(QLabel("PROJECT"))
+        self._bl_project_combo = QComboBox()
+        self._bl_project_combo.setMinimumWidth(160)
+        self._bl_project_combo.setEnabled(False)
+        lb.addWidget(self._bl_project_combo)
+
+        lb.addWidget(QLabel("BOARD"))
+        self._bl_board_combo = QComboBox()
+        self._bl_board_combo.setMinimumWidth(160)
+        self._bl_board_combo.setEnabled(False)
+        lb.addWidget(self._bl_board_combo)
+
+        self._bl_load_btn = QPushButton("↺  Load Backlog")
+        self._bl_load_btn.setObjectName("toolbar_btn")
+        self._bl_load_btn.setEnabled(False)
+        self._bl_load_btn.clicked.connect(self.load_requested.emit)
+        lb.addWidget(self._bl_load_btn)
+        lb.addStretch()
+
+        self._bl_hint = QLabel("Select a project and board, then click Load Backlog.")
+        self._bl_hint.setObjectName("dim")
+        lb.addWidget(self._bl_hint)
+        layout.addWidget(self._load_bar)
+
+        # ── Main content ──────────────────────────────────────────────────────
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(16, 12, 16, 16)
+        content_layout.setSpacing(8)
 
         hdr = QHBoxLayout()
         title = QLabel("◈  BACKLOG")
@@ -4805,15 +4845,7 @@ class BacklogWidget(QWidget):
         self._count_lbl = QLabel("")
         self._count_lbl.setObjectName("dim")
         hdr.addWidget(self._count_lbl)
-        layout.addLayout(hdr)
-
-        hint = QLabel(
-            "Stories not assigned to any sprint. "
-            "Select a project and board, then click  Load Backlog  to fetch."
-        )
-        hint.setObjectName("dim")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        content_layout.addLayout(hdr)
 
         # Filter + move-to-sprint bar
         fb = QHBoxLayout()
@@ -4839,7 +4871,7 @@ class BacklogWidget(QWidget):
         self._export_btn.setEnabled(False)
         self._export_btn.clicked.connect(self._export_csv)
         fb.addWidget(self._export_btn)
-        layout.addLayout(fb)
+        content_layout.addLayout(fb)
 
         self._table = QTableWidget()
         self._table.setColumnCount(7)
@@ -4863,8 +4895,32 @@ class BacklogWidget(QWidget):
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
-        layout.addWidget(self._table, 1)
+        content_layout.addWidget(self._table, 1)
+        layout.addWidget(content, 1)
         self._base_url = ""
+
+    def sync_combos(self, project_combo: QComboBox, board_combo: QComboBox):
+        """Mirror the Stories-tab project/board combos into the Backlog load bar."""
+        self._bl_project_combo.blockSignals(True)
+        self._bl_board_combo.blockSignals(True)
+
+        self._bl_project_combo.clear()
+        for i in range(project_combo.count()):
+            self._bl_project_combo.addItem(project_combo.itemText(i),
+                                           project_combo.itemData(i))
+        self._bl_project_combo.setCurrentIndex(project_combo.currentIndex())
+        self._bl_project_combo.setEnabled(project_combo.count() > 0)
+
+        self._bl_board_combo.clear()
+        for i in range(board_combo.count()):
+            self._bl_board_combo.addItem(board_combo.itemText(i),
+                                         board_combo.itemData(i))
+        self._bl_board_combo.setCurrentIndex(board_combo.currentIndex())
+        self._bl_board_combo.setEnabled(board_combo.count() > 0)
+        self._bl_load_btn.setEnabled(board_combo.count() > 0)
+
+        self._bl_project_combo.blockSignals(False)
+        self._bl_board_combo.blockSignals(False)
 
     def set_base_url(self, url: str):
         self._base_url = url
@@ -5153,7 +5209,7 @@ class MainWindow(QMainWindow):
         self._tab_backlog_btn = QPushButton("☰  Backlog")
         self._tab_backlog_btn.setObjectName("toolbar_btn")
         self._tab_backlog_btn.setToolTip("Backlog view  (Alt+3)")
-        self._tab_backlog_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
+        self._tab_backlog_btn.clicked.connect(self._switch_to_backlog)
         tb_layout.addWidget(self._tab_backlog_btn)
         self._tab_reports_btn = QPushButton("📊  Reports")
         self._tab_reports_btn.setObjectName("toolbar_btn")
@@ -5471,22 +5527,10 @@ class MainWindow(QMainWindow):
         backlog_outer_layout.setContentsMargins(0, 0, 0, 0)
         backlog_outer_layout.setSpacing(0)
 
-        # Toolbar for backlog tab
-        backlog_tb = QFrame()
-        backlog_tb.setStyleSheet(f"background: {PANEL_BG}; border-bottom: 1px solid {BORDER};")
-        btb_layout = QHBoxLayout(backlog_tb)
-        btb_layout.setContentsMargins(16, 6, 16, 6)
-        self.load_backlog_btn = QPushButton("↺  Load Backlog")
-        self.load_backlog_btn.setObjectName("toolbar_btn")
-        self.load_backlog_btn.setEnabled(False)
-        self.load_backlog_btn.clicked.connect(self._load_backlog)
-        btb_layout.addWidget(self.load_backlog_btn)
-        btb_layout.addStretch()
-        backlog_outer_layout.addWidget(backlog_tb)
-
         self.backlog_widget = BacklogWidget()
         self.backlog_widget.story_selected.connect(self._on_backlog_story_selected)
         self.backlog_widget.move_to_sprint.connect(self._on_backlog_move_to_sprint)
+        self.backlog_widget.load_requested.connect(self._on_backlog_load_requested)
         backlog_outer_layout.addWidget(self.backlog_widget, 1)
         self.tabs.addTab(backlog_outer, "☰  BACKLOG")
 
@@ -5902,7 +5946,7 @@ class MainWindow(QMainWindow):
             lambda: self._switch_to_kanban()
         )
         QShortcut(QKeySequence("Alt+3"), self).activated.connect(
-            lambda: self.tabs.setCurrentIndex(2)
+            self._switch_to_backlog
         )
         QShortcut(QKeySequence("Alt+4"), self).activated.connect(
             lambda: self.tabs.setCurrentIndex(3)
@@ -6475,6 +6519,29 @@ class MainWindow(QMainWindow):
                 self.kanban_widget.refresh(self._issues, self._sp_field),
             ),
         )
+
+    def _switch_to_backlog(self):
+        self.tabs.setCurrentIndex(2)
+        self.backlog_widget.sync_combos(self.project_combo, self.board_combo)
+
+    def _on_backlog_load_requested(self):
+        """User clicked Load Backlog from within BacklogWidget — sync selections and load."""
+        kb = self.backlog_widget
+
+        proj_idx  = kb._bl_project_combo.currentIndex()
+        board_idx = kb._bl_board_combo.currentIndex()
+
+        if proj_idx >= 0:
+            self.project_combo.blockSignals(True)
+            self.project_combo.setCurrentIndex(proj_idx)
+            self.project_combo.blockSignals(False)
+
+        if board_idx >= 0:
+            self.board_combo.blockSignals(True)
+            self.board_combo.setCurrentIndex(board_idx)
+            self.board_combo.blockSignals(False)
+
+        self._load_backlog()
 
     # ── Backlog helpers ───────────────────────────────────────────────────────
     def _load_backlog(self):
@@ -7232,6 +7299,8 @@ class MainWindow(QMainWindow):
         self.board_combo.blockSignals(False)
         if filtered:
             self._on_board_changed()
+        # Keep backlog widget combos in sync
+        self.backlog_widget.sync_combos(self.project_combo, self.board_combo)
 
     def _on_board_changed(self):
         bid = self.board_combo.currentData()
@@ -7376,7 +7445,8 @@ class MainWindow(QMainWindow):
         self.archive_btn.setEnabled(True)
         self.bulk_edit_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
-        self.load_backlog_btn.setEnabled(True)
+        # Sync backlog combos with current project/board selection
+        self.backlog_widget.sync_combos(self.project_combo, self.board_combo)
         self._rpt_gen_btn.setEnabled(True)
         self._rpt_people_btn.setEnabled(True)
         self._rpt_velocity_btn.setEnabled(True)
