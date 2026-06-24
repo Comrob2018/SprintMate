@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.21.1"
+APP_VERSION  = "2.22.0"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -691,7 +691,7 @@ class JiraClient:
         fields = ",".join([
             "summary", "assignee", "status", "priority", "description",
             "comment", "issuetype", sp, fl, "duedate",
-            "sprint", "closedSprints", "customfield_10020"
+            "sprint", "closedSprints", "customfield_10020", "issuelinks"
         ])
         max_results = 100
         start = 0
@@ -1752,7 +1752,8 @@ class SettingsDialog(QDialog):
 
 # ── Story edit panel ──────────────────────────────────────────────────────────
 class StoryEditPanel(QFrame):
-    saved = pyqtSignal(str, dict, str, object, object)
+    saved   = pyqtSignal(str, dict, str, object, object)
+    changed = pyqtSignal()   # emitted when any field is modified
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1927,6 +1928,22 @@ class StoryEditPanel(QFrame):
         history_layout.addLayout(_comment_btn_row)
         layout.addWidget(grp_history)
 
+        # ── Issue links (read-only) ───────────────────────────────────────────
+        self._links_grp = QGroupBox("LINKED ISSUES")
+        links_layout = QVBoxLayout(self._links_grp)
+        links_layout.setContentsMargins(8, 8, 8, 8)
+        links_layout.setSpacing(2)
+        self._links_list = QTextEdit()
+        self._links_list.setReadOnly(True)
+        self._links_list.setMaximumHeight(80)
+        self._links_list.setPlaceholderText("No links.")
+        self._links_list.setStyleSheet(
+            f"background: {DARK_BG}; border: none; color: {TEXT_SEC}; font-size: 12px;"
+        )
+        links_layout.addWidget(self._links_list)
+        self._links_grp.setVisible(False)
+        layout.addWidget(self._links_grp)
+
         # ── Comment ───────────────────────────────────────────────────────────
         grp_comment = QGroupBox("ADD COMMENT")
         comment_layout = QVBoxLayout(grp_comment)
@@ -1981,7 +1998,13 @@ class StoryEditPanel(QFrame):
         self.comment_template_combo.blockSignals(True)
         self.comment_template_combo.setCurrentIndex(0)
         self.comment_template_combo.blockSignals(False)
-    
+
+    def _copy_key(self):
+        if self.current_key:
+            QApplication.clipboard().setText(self.current_key)
+            self.copy_key_btn.setText("✓")
+            QTimer.singleShot(1500, lambda: self.copy_key_btn.setText("⎘"))
+
     def _undo_save(self):
         if not self._pre_save_snapshot:
             return
@@ -2049,11 +2072,12 @@ class StoryEditPanel(QFrame):
     def _check_dirty(self):
         if not self.current_key:
             return
-        current = self._snapshot_state()
+        current  = self._snapshot_state()
         is_dirty = (current != self._snapshot)
         self.save_btn.setEnabled(is_dirty)
         if is_dirty:
             self.save_btn.setToolTip("Unsaved changes")
+            self.changed.emit()
         else:
             self.save_btn.setToolTip("No changes to save")
 
@@ -2249,7 +2273,29 @@ class StoryEditPanel(QFrame):
             self._edit_comment_btn.setEnabled(False)
             self._delete_comment_btn.setEnabled(False)
 
-    def _copy_key(self):
+        # ── Issue links ───────────────────────────────────────────────────────
+        links = fields.get("issuelinks", [])
+        if links:
+            link_lines = []
+            for lnk in links:
+                ltype = (lnk.get("type") or {}).get("name", "relates to")
+                if "outwardIssue" in lnk:
+                    rel   = (lnk.get("type") or {}).get("outward", ltype)
+                    other = lnk["outwardIssue"]
+                elif "inwardIssue" in lnk:
+                    rel   = (lnk.get("type") or {}).get("inward", ltype)
+                    other = lnk["inwardIssue"]
+                else:
+                    continue
+                okey    = other.get("key", "?")
+                osumm   = (other.get("fields") or {}).get("summary", "")[:60]
+                ostatus = ((other.get("fields") or {}).get("status") or {}).get("name", "")
+                link_lines.append(f"{rel}  {okey}  [{ostatus}]  {osumm}")
+            self._links_list.setPlainText("\n".join(link_lines))
+            self._links_grp.setVisible(True)
+        else:
+            self._links_list.setPlainText("")
+            self._links_grp.setVisible(False)
         if self.current_key:
             QApplication.clipboard().setText(self.current_key)
             self.copy_key_btn.setText("✓")
@@ -4418,21 +4464,57 @@ class KanbanColumn(QFrame):
 
 class KanbanBoardWidget(QWidget):
     """Full Kanban board: one column per status, drag-and-drop between them."""
-    story_selected    = pyqtSignal(str)        # issue key clicked on card
-    transition_requested = pyqtSignal(str, str)  # (key, new_status_name)
+    story_selected       = pyqtSignal(str)
+    transition_requested = pyqtSignal(str, str)
     new_story_requested  = pyqtSignal()
+    load_requested       = pyqtSignal()   # ask MainWindow to load the current sprint
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._columns: dict[str, KanbanColumn] = {}
         self._sp_field     = ""
-        self._last_issues: list = []   # cache — skip re-render when unchanged
-        self._all_issues:  list = []   # full set before filter
+        self._last_issues: list = []
+        self._all_issues:  list = []
         self._base_url     = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(6)
+
+        # ── Load toolbar (shown when board is empty) ───────────────────────────
+        self._load_bar = QFrame()
+        self._load_bar.setStyleSheet(
+            f"QFrame {{ background: {PANEL_BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 8px; }}"
+        )
+        lb = QHBoxLayout(self._load_bar)
+        lb.setContentsMargins(12, 8, 12, 8)
+        lb.setSpacing(8)
+        lb.addWidget(QLabel("PROJECT"))
+        self._kb_project_combo = QComboBox()
+        self._kb_project_combo.setMinimumWidth(160)
+        self._kb_project_combo.setEnabled(False)
+        lb.addWidget(self._kb_project_combo)
+        lb.addWidget(QLabel("BOARD"))
+        self._kb_board_combo = QComboBox()
+        self._kb_board_combo.setMinimumWidth(160)
+        self._kb_board_combo.setEnabled(False)
+        lb.addWidget(self._kb_board_combo)
+        lb.addWidget(QLabel("SPRINT"))
+        self._kb_sprint_combo = QComboBox()
+        self._kb_sprint_combo.setMinimumWidth(180)
+        self._kb_sprint_combo.setEnabled(False)
+        lb.addWidget(self._kb_sprint_combo)
+        self._kb_load_btn = QPushButton("↺  Load")
+        self._kb_load_btn.setObjectName("toolbar_btn")
+        self._kb_load_btn.setEnabled(False)
+        self._kb_load_btn.clicked.connect(self._on_kb_load_clicked)
+        lb.addWidget(self._kb_load_btn)
+        lb.addStretch()
+        self._kb_hint = QLabel("Select a sprint and click Load to populate the board.")
+        self._kb_hint.setObjectName("dim")
+        lb.addWidget(self._kb_hint)
+        layout.addWidget(self._load_bar)
 
         # ── Board header ──────────────────────────────────────────────────────
         hdr = QHBoxLayout()
@@ -4515,6 +4597,46 @@ class KanbanBoardWidget(QWidget):
         layout.addWidget(scroll, 1)
 
     # ── Public API ────────────────────────────────────────────────────────────
+    def sync_combos(self, project_combo: QComboBox, board_combo: QComboBox,
+                    sprint_combo: QComboBox):
+        """Mirror the Stories-tab project/board/sprint combos into the Kanban toolbar."""
+        self._kb_project_combo.blockSignals(True)
+        self._kb_board_combo.blockSignals(True)
+        self._kb_sprint_combo.blockSignals(True)
+
+        # Project
+        self._kb_project_combo.clear()
+        for i in range(project_combo.count()):
+            self._kb_project_combo.addItem(project_combo.itemText(i),
+                                           project_combo.itemData(i))
+        self._kb_project_combo.setCurrentIndex(project_combo.currentIndex())
+        self._kb_project_combo.setEnabled(project_combo.count() > 0)
+
+        # Board
+        self._kb_board_combo.clear()
+        for i in range(board_combo.count()):
+            self._kb_board_combo.addItem(board_combo.itemText(i),
+                                         board_combo.itemData(i))
+        self._kb_board_combo.setCurrentIndex(board_combo.currentIndex())
+        self._kb_board_combo.setEnabled(board_combo.count() > 0)
+
+        # Sprint
+        self._kb_sprint_combo.clear()
+        for i in range(sprint_combo.count()):
+            self._kb_sprint_combo.addItem(sprint_combo.itemText(i),
+                                          sprint_combo.itemData(i))
+        self._kb_sprint_combo.setCurrentIndex(sprint_combo.currentIndex())
+        self._kb_sprint_combo.setEnabled(sprint_combo.count() > 0)
+        self._kb_load_btn.setEnabled(sprint_combo.count() > 0)
+
+        self._kb_project_combo.blockSignals(False)
+        self._kb_board_combo.blockSignals(False)
+        self._kb_sprint_combo.blockSignals(False)
+
+    def _on_kb_load_clicked(self):
+        """Sync selected values back to Stories combos then request a load."""
+        self.load_requested.emit()
+
     def set_sprint_name(self, name: str):
         """Update the board title to reflect the active sprint name."""
         self._title_lbl.setText(f"◈  {name.upper()}" if name else "◈  ACTIVE SPRINT")
@@ -4529,8 +4651,19 @@ class KanbanBoardWidget(QWidget):
         self._last_issues = issues
         self._all_issues  = issues
         self._sp_field    = sp_field
+        # Hide load bar once stories are present; show it when board is empty
+        self._load_bar.setVisible(not bool(issues))
         self._rebuild_assignee_combo(issues)
         self._render_issues(issues)
+
+    def clear(self):
+        """Clear all cards and show the load toolbar."""
+        self._last_issues = []
+        self._all_issues  = []
+        for col in self._columns.values():
+            col.clear_cards()
+        self._status_lbl.setText("No stories loaded")
+        self._load_bar.setVisible(True)
 
     def refresh(self, issues: list, sp_field: str):
         """Force re-render (used after a transition)."""
@@ -4923,6 +5056,9 @@ class MainWindow(QMainWindow):
         self._reselect_key: str | None = None
         self._sp_field = JiraClient._FIELD_MAP[JiraClient.MODE_SECONDARY]["story_point"]
         self._fl_field = "customfield_10100"
+        self._column_prefs: dict[str, set] = {}   # board_id -> set of visible col indices
+        self._recent_keys: list[str] = []          # MRU list of viewed issue keys
+        self._unsaved_row: int | None = None       # row with pending edits
 
         self._build_ui()
         self._settings = self._load_settings()
@@ -5155,6 +5291,18 @@ class MainWindow(QMainWindow):
         self.archive_btn.clicked.connect(self._open_archive)
         self.archive_btn.setEnabled(False)
         fb_row2.addWidget(self.archive_btn)
+        self.bulk_edit_btn = QPushButton("✎  Bulk Edit")
+        self.bulk_edit_btn.setObjectName("toolbar_btn")
+        self.bulk_edit_btn.setToolTip("Edit assignee, priority, or story points for multiple stories")
+        self.bulk_edit_btn.clicked.connect(self._open_bulk_edit)
+        self.bulk_edit_btn.setEnabled(False)
+        fb_row2.addWidget(self.bulk_edit_btn)
+        self._help_btn = QPushButton("?")
+        self._help_btn.setObjectName("toolbar_btn")
+        self._help_btn.setFixedWidth(28)
+        self._help_btn.setToolTip("Keyboard shortcuts  (?)")
+        self._help_btn.clicked.connect(self._show_shortcut_dialog)
+        fb_row2.addWidget(self._help_btn)
         fb_row2.addStretch()
         fb_row2.addWidget(QLabel("ASSIGNEE"))
         self.assignee_filter_combo = QComboBox()
@@ -5196,6 +5344,26 @@ class MainWindow(QMainWindow):
         self.sprint_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         count_row.addWidget(self.sprint_lbl)
         left_layout.addLayout(count_row)
+
+        # ── Sprint progress bar ───────────────────────────────────────────────
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFixedHeight(4)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setVisible(False)
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {BORDER};
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background: {ACCENT_GREEN};
+                border-radius: 2px;
+            }}
+        """)
+        left_layout.addWidget(self._progress_bar)
 
         self.table = QTableWidget()
         self.table.setColumnCount(9)
@@ -5261,6 +5429,13 @@ class MainWindow(QMainWindow):
         self._rank_down_btn.setEnabled(False)
         self._rank_down_btn.clicked.connect(lambda: self._rank_selected(1))
         _qbl.addWidget(self._rank_down_btn)
+        self._recent_btn = QPushButton("🕐")
+        self._recent_btn.setObjectName("toolbar_btn")
+        self._recent_btn.setFixedHeight(28)
+        self._recent_btn.setFixedWidth(32)
+        self._recent_btn.setToolTip("Recently viewed stories")
+        self._recent_btn.clicked.connect(self._show_recent_menu)
+        _qbl.addWidget(self._recent_btn)
         left_layout.addWidget(quick_bar)
 
         splitter.addWidget(left)
@@ -5270,6 +5445,7 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(8, 16, 16, 16)
         self.edit_panel = StoryEditPanel()
         self.edit_panel.saved.connect(self._on_save_story)
+        self.edit_panel.changed.connect(self._mark_unsaved_row)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.edit_panel)
@@ -5288,6 +5464,7 @@ class MainWindow(QMainWindow):
         self.kanban_widget.new_story_requested.connect(
             lambda: self.new_story_btn.click() if self.new_story_btn.isEnabled() else None
         )
+        self.kanban_widget.load_requested.connect(self._on_kanban_load_requested)
         self.tabs.addTab(self.kanban_widget, "⊞  ACTIVE SPRINT")
 
         # ── Backlog tab ───────────────────────────────────────────────────────
@@ -5360,7 +5537,8 @@ class MainWindow(QMainWindow):
             self._copy_row_markdown
         )
 
-        # ── New keyboard shortcuts ────────────────────────────────────────────
+        # ? — shortcut reference card
+        QShortcut(QKeySequence("?"), self).activated.connect(self._show_shortcut_dialog)
         # N — New story (when stories are loaded)
         QShortcut(QKeySequence("N"), self.table).activated.connect(
             lambda: self.new_story_btn.click() if self.new_story_btn.isEnabled() else None
@@ -5859,10 +6037,35 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Move Failed", str(e)),
             ),
         )
+    def _on_kanban_load_requested(self):
+        """User clicked Load from the Kanban toolbar — sync selection and load."""
+        kb = self.kanban_widget
+        proj_idx   = kb._kb_project_combo.currentIndex()
+        board_idx  = kb._kb_board_combo.currentIndex()
+        sprint_idx = kb._kb_sprint_combo.currentIndex()
+
+        if proj_idx >= 0:
+            self.project_combo.blockSignals(True)
+            self.project_combo.setCurrentIndex(proj_idx)
+            self.project_combo.blockSignals(False)
+        if board_idx >= 0:
+            self.board_combo.blockSignals(True)
+            self.board_combo.setCurrentIndex(board_idx)
+            self.board_combo.blockSignals(False)
+        if sprint_idx >= 0:
+            self.sprint_combo.blockSignals(True)
+            self.sprint_combo.setCurrentIndex(sprint_idx)
+            self.sprint_combo.blockSignals(False)
+
+        self.load_btn.click()
+
     def _switch_to_kanban(self):
         self.tabs.setCurrentIndex(1)
+        # Always keep the load toolbar in sync with current Stories selections
+        self.kanban_widget.sync_combos(
+            self.project_combo, self.board_combo, self.sprint_combo
+        )
         if self._issues:
-            # populate() skips re-render if issues identity unchanged
             self.kanban_widget.populate(self._issues, self._sp_field)
 
     def _on_kanban_story_selected(self, key: str):
@@ -6312,7 +6515,9 @@ class MainWindow(QMainWindow):
         self.bulk_create_btn.setEnabled(False)
         self.report_btn.setEnabled(False)
         self.archive_btn.setEnabled(False)
-        self.quick_add_edit.setEnabled(False)
+        self.bulk_edit_btn.setEnabled(False)
+        self._progress_bar.setVisible(False)
+        self._progress_bar.setValue(0)
         self.quick_add_edit.clear()
         self.quick_add_type_combo.setEnabled(False)
         self.quick_add_type_combo.clear()
@@ -6322,6 +6527,7 @@ class MainWindow(QMainWindow):
         self.sprint_mgr_btn.setEnabled(False)
         self.tabs.setTabText(1, "⊞  ACTIVE SPRINT")
         self.kanban_widget.set_sprint_name("")
+        self.kanban_widget.clear()
         self.assignee_filter_combo.clear()
         self.edit_panel.current_key = None
         self.edit_panel.title_lbl.setText("Select a story to edit")
@@ -6703,6 +6909,10 @@ class MainWindow(QMainWindow):
                         self.sprint_combo.setCurrentIndex(i); break
         self.edit_panel.set_sprints(sprints)
         self.backlog_widget.set_sprints(sprints)
+        # Keep Kanban toolbar in sync
+        self.kanban_widget.sync_combos(
+            self.project_combo, self.board_combo, self.sprint_combo
+        )
 
     def _load_sprint_issues(self, reselect_key: str = None):
         bid = self.board_combo.currentData()
@@ -6761,6 +6971,7 @@ class MainWindow(QMainWindow):
         self.report_btn.setEnabled(True)
         self.velocity_btn.setEnabled(True)
         self.archive_btn.setEnabled(True)
+        self.bulk_edit_btn.setEnabled(True)
         self.quick_add_edit.setEnabled(True)
         self.load_backlog_btn.setEnabled(True)
         # Update Kanban board title with active sprint name
@@ -6811,6 +7022,7 @@ class MainWindow(QMainWindow):
     def _update_velocity_bar(self):
         if not self._issues:
             self.velocity_lbl.setText("")
+            self._progress_bar.setVisible(False)
             return
         total_pts = done_pts = in_prog = done_cnt = 0
         sp = self._sp_field
@@ -6827,9 +7039,329 @@ class MainWindow(QMainWindow):
                 done_pts += pts; done_cnt += 1
             elif status == "In Progress":
                 in_prog += 1
+        pct = round(done_pts / total_pts * 100) if total_pts else 0
         self.velocity_lbl.setText(
             f"{total_pts} pts total  ·  {in_prog} in progress  ·  {done_cnt} done ({done_pts} pts)"
         )
+        self._progress_bar.setValue(pct)
+        # Colour the bar: green when done, amber when mid-sprint, red when behind
+        if pct >= 80:
+            chunk_colour = ACCENT_GREEN
+        elif pct >= 40:
+            chunk_colour = "#E3B341"
+        else:
+            chunk_colour = ACCENT_ORANGE
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {BORDER};
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background: {chunk_colour};
+                border-radius: 2px;
+            }}
+        """)
+        self._progress_bar.setToolTip(
+            f"{done_pts} of {total_pts} pts done ({pct}%)  ·  "
+            f"{done_cnt} of {len(self._issues)} stories done"
+        )
+        self._progress_bar.setVisible(True)
+
+    def _mark_unsaved_row(self):
+        """Add a dot indicator to the KEY cell of the currently edited row."""
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        ki = self.table.item(row, COL_KEY)
+        if ki and not ki.text().endswith(" ●"):
+            ki.setText(ki.text() + " ●")
+            ki.setForeground(QColor("#E3B341"))
+        self._unsaved_row = row
+
+    def _show_recent_menu(self):
+        """Show a popup menu of recently viewed stories."""
+        menu = QMenu(self)
+        if not self._recent_keys:
+            act = menu.addAction("No recent stories")
+            act.setEnabled(False)
+        else:
+            for key in self._recent_keys:
+                issue = next((i for i in self._issues if i.get("key") == key), None)
+                summary = ""
+                if issue:
+                    summary = (issue.get("fields", {}).get("summary", "") or "")[:50]
+                label = f"{key}  —  {summary}" if summary else key
+                act = menu.addAction(label)
+                act.setData(key)
+        menu.addSeparator()
+        clear = menu.addAction("✕  Clear history")
+        chosen = menu.exec(self._recent_btn.mapToGlobal(
+            self._recent_btn.rect().bottomLeft()
+        ))
+        if chosen and chosen.data():
+            key = chosen.data()
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, COL_KEY)
+                if item and item.text().replace(" ●", "") == key:
+                    self.table.selectRow(row)
+                    self.table.scrollToItem(item)
+                    break
+        elif chosen == clear:
+            self._recent_keys.clear()
+
+    def _open_bulk_edit(self):
+        """Open a dialog to bulk-edit assignee, priority, or points for selected rows."""
+        selected_rows = list({idx.row() for idx in self.table.selectedIndexes()})
+        if not selected_rows:
+            QMessageBox.information(self, "Bulk Edit",
+                "Select one or more stories in the table first.")
+            return
+        keys = []
+        for r in selected_rows:
+            ki = self.table.item(r, COL_KEY)
+            if ki:
+                keys.append(ki.text().replace(" ●", ""))
+        if not keys:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Bulk Edit — {len(keys)} stories")
+        dlg.setMinimumWidth(380)
+        dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(10)
+
+        heading = QLabel(f"◈  BULK EDIT  —  {len(keys)} STORIES")
+        heading.setObjectName("heading")
+        layout.addWidget(heading)
+
+        keys_lbl = QLabel(", ".join(keys[:8]) + ("…" if len(keys) > 8 else ""))
+        keys_lbl.setObjectName("dim")
+        keys_lbl.setWordWrap(True)
+        layout.addWidget(keys_lbl)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        assignee_cb = QComboBox()
+        assignee_cb.addItem("— No change —", None)
+        assignee_cb.addItem("Unassigned", "UNASSIGNED")
+        for m in self._users_cache:
+            uid  = m.get("name") or m.get("accountId", "")
+            name = m.get("displayName", uid)
+            assignee_cb.addItem(name, uid)
+        form.addRow("Assignee:", assignee_cb)
+
+        priority_cb = QComboBox()
+        priority_cb.addItem("— No change —", None)
+        for p in PRIORITIES:
+            priority_cb.addItem(p, p)
+        form.addRow("Priority:", priority_cb)
+
+        points_cb = QComboBox()
+        points_cb.addItem("— No change —", None)
+        for v in FIBONACCI:
+            points_cb.addItem(str(v), v)
+        form.addRow("Story Points:", points_cb)
+
+        layout.addLayout(form)
+
+        note = QLabel("Only fields set above will be changed. "
+                      "Fields left at '— No change —' are untouched.")
+        note.setObjectName("dim")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Apply to All")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        assignee_val = assignee_cb.currentData()
+        priority_val = priority_cb.currentData()
+        points_val   = points_cb.currentData()
+
+        if assignee_val is None and priority_val is None and points_val is None:
+            self._status("Bulk edit: nothing to change.")
+            return
+
+        fields_payload: dict = {}
+        if assignee_val is not None:
+            fields_payload["assignee"] = (
+                None if assignee_val == "UNASSIGNED"
+                else {"name": assignee_val}
+            )
+        if priority_val is not None:
+            fields_payload["priority"] = {"name": priority_val}
+        if points_val is not None:
+            fields_payload[self._sp_field] = points_val
+
+        n = len(keys)
+        self._busy(True)
+        self._status(f"Bulk editing {n} stories…")
+
+        def _do():
+            errors = []
+            for key in keys:
+                try:
+                    self._client.update_issue(key, fields_payload)
+                except Exception as e:
+                    errors.append(f"{key}: {e}")
+            return errors
+
+        def _on_done(errors):
+            self._busy(False)
+            if errors:
+                self._status(f"⚠ Bulk edit: {len(errors)} error(s).")
+                QMessageBox.warning(self, "Bulk Edit",
+                    f"{n - len(errors)} updated, {len(errors)} failed:\n"
+                    + "\n".join(errors[:5]))
+            else:
+                self._status(f"✓ Bulk edit applied to {n} stories.")
+            self._load_sprint_issues(reselect_key=keys[-1])
+
+        self._spawn(_do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status("✗ Bulk edit failed."),
+                QMessageBox.critical(self, "Bulk Edit Failed", str(e)),
+            ))
+
+    def _show_shortcut_dialog(self):
+        """Show the keyboard shortcut reference card."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Keyboard Shortcuts")
+        dlg.setMinimumWidth(500)
+        dlg.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(8)
+
+        heading = QLabel("◈  KEYBOARD SHORTCUTS")
+        heading.setObjectName("heading")
+        layout.addWidget(heading)
+
+        SHORTCUTS = [
+            ("Global", [
+                ("Ctrl+L",       "Load Stories"),
+                ("Ctrl+N",       "New Story"),
+                ("Ctrl+S",       "Save Changes"),
+                ("Ctrl+I",       "Import Comments"),
+                ("Ctrl+E",       "Export Stories"),
+                ("Ctrl+F",       "Focus filter box"),
+                ("Ctrl+C",       "Copy selected row (comma-separated)"),
+                ("Ctrl+Shift+C", "Copy full issue as CSV row"),
+                ("Ctrl+Shift+M", "Copy row as Markdown"),
+                ("Alt+1",        "Switch to Stories view"),
+                ("Alt+2",        "Switch to Active Sprint board"),
+                ("Alt+3",        "Switch to Backlog view"),
+                ("?",            "Show this shortcut reference"),
+            ]),
+            ("Table (when focused)", [
+                ("N",       "New Story"),
+                ("R",       "Refresh sprint"),
+                ("S",       "Save changes"),
+                ("Escape",  "Clear selection"),
+                ("Delete",  "Quick-archive selected story"),
+                ("↑ / ↓",   "Navigate rows"),
+            ]),
+            ("Inline editing (double-click cell)", [
+                ("PTS",      "Open Fibonacci story-points picker"),
+                ("ASSIGNEE", "Open team-member picker"),
+                ("STATUS",   "Open available transitions picker"),
+                ("DUE DATE", "Open calendar date picker"),
+            ]),
+        ]
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        content = QWidget()
+        cl = QVBoxLayout(content)
+        cl.setSpacing(16)
+        cl.setContentsMargins(0, 0, 8, 0)
+
+        for section, items in SHORTCUTS:
+            sec_lbl = QLabel(section.upper())
+            sec_lbl.setStyleSheet(
+                f"color: {ACCENT_CYAN}; font-size: 11px; font-weight: bold; "
+                f"letter-spacing: 1px; margin-top: 4px;"
+            )
+            cl.addWidget(sec_lbl)
+            for key, desc in items:
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 0, 0, 0)
+                key_lbl = QLabel(key)
+                key_lbl.setStyleSheet(
+                    f"background: {CARD_BG}; color: {TEXT_PRI}; "
+                    f"padding: 2px 8px; border-radius: 4px; "
+                    f"font-family: monospace; font-size: 12px; "
+                    f"border: 1px solid {BORDER}; min-width: 130px;"
+                )
+                key_lbl.setFixedWidth(160)
+                desc_lbl = QLabel(desc)
+                desc_lbl.setStyleSheet(f"color: {TEXT_SEC}; font-size: 12px;")
+                row_l.addWidget(key_lbl)
+                row_l.addWidget(desc_lbl, 1)
+                cl.addWidget(row_w)
+
+        cl.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+        dlg.resize(500, 560)
+        dlg.exec()
+
+    def _check_quick_add_duplicate(self, summary: str) -> bool:
+        """Return True if a close match exists in the sprint; prompt user to confirm."""
+        term = summary.lower().strip()
+        matches = []
+        for iss in self._issues:
+            existing = (iss.get("fields", {}).get("summary") or "").lower()
+            # Simple overlap check — if >60% of words match
+            tw = set(term.split())
+            ew = set(existing.split())
+            if tw and ew and len(tw & ew) / max(len(tw), len(ew)) > 0.6:
+                matches.append(f"{iss['key']}  —  {iss['fields'].get('summary','')[:70]}")
+        if not matches:
+            return True   # no duplicates, safe to proceed
+        reply = QMessageBox.question(
+            self, "Possible Duplicate",
+            f"Similar stories already exist in this sprint:\n\n"
+            + "\n".join(matches[:5])
+            + "\n\nCreate anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _get_issue_links(self, key: str):
+        """Fetch issue links for a story (blocks / is blocked by / relates to)."""
+        if not self._client:
+            return []
+        try:
+            url = (f"{self._client.base_url}/rest/api/"
+                   f"{self._client.api_version}/issue/{key}?fields=issuelinks")
+            req = urllib.request.Request(url, headers=self._client.headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            return data.get("fields", {}).get("issuelinks", [])
+        except Exception:
+            return []
 
     def _apply_default_columns(self):
         for col, _ in COLS_TOGGLABLE:
@@ -6846,12 +7378,25 @@ class MainWindow(QMainWindow):
         if chosen:
             col = chosen.data()
             self.table.setColumnHidden(col, not self.table.isColumnHidden(col))
+            # Persist column prefs for current board
+            board_id = str(self.board_combo.currentData() or "")
+            if board_id:
+                visible = {c for c, _ in COLS_TOGGLABLE
+                           if not self.table.isColumnHidden(c)}
+                self._column_prefs[board_id] = visible
 
     def _populate_table(self, issues):
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self.table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
-        self._apply_default_columns()
+        # Restore saved column prefs for this board, else apply defaults
+        board_id = str(self.board_combo.currentData() or "")
+        if board_id and board_id in self._column_prefs:
+            visible = self._column_prefs[board_id]
+            for col, _ in COLS_TOGGLABLE:
+                self.table.setColumnHidden(col, col not in visible)
+        else:
+            self._apply_default_columns()
         self.search_edit.blockSignals(True)
         self.search_edit.clear()
         self.search_edit.blockSignals(False)
@@ -6869,9 +7414,46 @@ class MainWindow(QMainWindow):
 
             key_item = QTableWidgetItem(issue["key"])
             key_item.setForeground(QColor(ACCENT_CYAN))
+            # Rich tooltip — description excerpt + latest comment
+            desc = ""
+            raw_desc = f.get("description") or ""
+            if isinstance(raw_desc, dict):
+                # ADF — flatten text nodes
+                def _adf_text(node):
+                    if isinstance(node, dict):
+                        if node.get("type") == "text":
+                            return node.get("text", "")
+                        return "".join(_adf_text(c) for c in node.get("content", []))
+                    return ""
+                desc = _adf_text(raw_desc)
+            elif isinstance(raw_desc, str):
+                desc = raw_desc
+            desc_preview = (desc[:140] + "…") if len(desc) > 140 else desc
+            comments = (f.get("comment") or {}).get("comments", [])
+            last_comment = ""
+            if comments:
+                c = comments[-1]
+                author = (c.get("author") or {}).get("displayName", "?")
+                body = c.get("body", "")
+                if isinstance(body, dict):
+                    def _adf_text2(n):
+                        if isinstance(n, dict):
+                            if n.get("type") == "text": return n.get("text","")
+                            return "".join(_adf_text2(x) for x in n.get("content",[]))
+                        return ""
+                    body = _adf_text2(body)
+                last_comment = f"\n💬 {author}: {str(body)[:100]}"
+            tooltip = f"{issue['key']}"
+            if desc_preview:
+                tooltip += f"\n{desc_preview}"
+            if last_comment:
+                tooltip += last_comment
+            key_item.setToolTip(tooltip)
             self.table.setItem(row, COL_KEY, key_item)
 
-            self.table.setItem(row, COL_SUMMARY, QTableWidgetItem(f.get("summary", "")))
+            sum_item = QTableWidgetItem(f.get("summary", ""))
+            sum_item.setToolTip(tooltip)
+            self.table.setItem(row, COL_SUMMARY, sum_item)
 
             assignee = f.get("assignee")
             aname = assignee.get("displayName", "Unassigned") if assignee else "—"
@@ -6958,6 +7540,21 @@ class MainWindow(QMainWindow):
         issue = next((i for i in self._issues if i["key"] == key), None)
         if not issue:
             return
+
+        # Clear unsaved indicator from previously selected row
+        if self._unsaved_row is not None:
+            ki = self.table.item(self._unsaved_row, COL_KEY)
+            if ki:
+                text = ki.text()
+                if text.endswith(" ●"):
+                    ki.setText(text[:-2])
+            self._unsaved_row = None
+
+        # Track recently viewed (MRU, max 10, no duplicates)
+        if key in self._recent_keys:
+            self._recent_keys.remove(key)
+        self._recent_keys.insert(0, key)
+        self._recent_keys = self._recent_keys[:10]
 
         self.edit_panel.load_issue(issue)
         self._rank_up_btn.setEnabled(True)
@@ -7627,6 +8224,13 @@ class MainWindow(QMainWindow):
     # ── Save ──────────────────────────────────────────────────────────────────
     def _on_save_story(self, key: str, fields: dict, comment: str,
                        transition_id, target_sprint):
+        # Clear unsaved row indicator
+        if self._unsaved_row is not None:
+            ki = self.table.item(self._unsaved_row, COL_KEY)
+            if ki:
+                ki.setText(ki.text().replace(" ●", ""))
+                ki.setForeground(QColor(ACCENT_CYAN))
+            self._unsaved_row = None
         self._busy(True)
         self._status(f"Saving {key}…")
         self._spawn(
@@ -7844,6 +8448,9 @@ class MainWindow(QMainWindow):
     def _quick_add_story(self):
         summary = self.quick_add_edit.text().strip()
         if not summary or not self._client:
+            return
+        # Duplicate detection
+        if not self._check_quick_add_duplicate(summary):
             return
         # Use the selected type from the quick-add combo
         itype_data = self.quick_add_type_combo.currentData()
