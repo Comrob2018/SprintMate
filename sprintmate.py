@@ -384,7 +384,7 @@ QTabBar::tab:hover:!selected {{
 class JiraClient:
     """Supports both Jira Cloud (Basic auth, API v3) and Data Center/Server (Bearer PAT, API v2)."""
     MODE_SECONDARY = "Secondary"
-    MODE_PRIMARY     = "Primary"
+    MODE_PRIMARY = "Primary"
 
     # mappings
     _FIELD_MAP = {
