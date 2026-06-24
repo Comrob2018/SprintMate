@@ -1,46 +1,47 @@
+# SprintMate  ◈  v2.21.1
 
-# SprintMate  ◈  v2.21.0
- 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create stories from CSV, export sprint data, generate sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
- 
+
 ---
- 
+
 ## Setup
- 
+
 ### 1. Generate your Personal Access Token
- 
+
 * Log in to JIRA.
 * Open Profile ▶ Personal Access Tokens.
 * Click Create token, give it a name, set an expiry, pick the required scopes, and Create.
 * **Copy the generated token** – you'll see it only once.
+
 ### 2. Install Python
- 
+
 * Go to the appropriate place to get the latest version of Python.
 * **If using this on a company PC, you may need to get permission — check your approved software listing or internal process.**
+
 ### 3. Install dependencies
- 
+
 ```bash
 pip install -r requirements.txt
 ```
- 
+
 > **`keyring` is recommended** for secure PAT storage. If installed, tokens are stored in your OS native credential store (Windows Credential Manager, macOS Keychain, Linux Secret Service) instead of encoded in application settings. If `keyring` is not installed the app falls back to legacy storage automatically.
- 
+
 > The velocity history chart requires `PyQt6-Qt6-Svg` for SVG rendering. Install it with `pip install PyQt6-Qt6-Svg`. If it is not present, a text prompt will be shown instead of the chart.
- 
+
 ### 4. Run the app
- 
+
 ```bash
 python sprintmate.py
 ```
- 
+
 ---
- 
+
 ## Configuration
- 
+
 On first launch, click **⚙ Configure** in the top bar. SprintMate supports two Jira Data Center instances — **Primary** and **Secondary** — each configured independently. You can set a custom **Display Name** for each instance to replace the Primary/Secondary labels throughout the app.
- 
+
 Use the **PRIMARY / SECONDARY** toggle at the top of the settings dialog to switch between them.
- 
+
 | Field | Value |
 |---|---|
 | **Display Name** | Optional. Replaces "Primary" / "Secondary" labels throughout the app (e.g. "Production", "Staging") |
@@ -51,43 +52,44 @@ Use the **PRIMARY / SECONDARY** toggle at the top of the settings dialog to swit
 | **Default Board** | Board name to auto-select on connect, e.g. `project1 board` |
 | **Filter Projects** | Comma-separated substrings — only matching projects appear in the dropdown. Leave blank to show all. |
 | **Filter Boards** | Comma-separated substrings — only matching boards appear in the dropdown. Leave blank to show all. |
- 
+
 Click **Test Connection** to verify credentials before saving. Click **Save** to apply.
- 
+
 > SprintMate will warn you in the status bar if a token has expired or is within 14 days of expiry — on launch, after saving settings, and every 4 hours while the app is running.
- 
+
 ---
- 
+
 ## Workflow
- 
+
 ### Views
- 
+
 SprintMate has three views, switchable via the top bar buttons or keyboard shortcuts:
- 
+
 | View | Button | Shortcut | Description |
 |---|---|---|---|
 | **◈ Stories** | ◈ Stories | `Alt+1` | The main sortable/filterable story table with edit panel |
 | **⊞ Kanban** | ⊞ Kanban | `Alt+2` | Drag-and-drop board with one column per status |
 | **☰ Backlog** | ☰ Backlog | `Alt+3` | All open stories not assigned to any sprint |
- 
+
 ### Navigating stories
- 
+
 1. On launch, the last-used instance connects automatically if credentials are saved.
 2. **Select a project** from the PROJECT dropdown — boards and members auto-load.
 3. **Select a board** — sprints auto-load.
 4. **Select a sprint** and click **Load Stories** (or press `Ctrl+L`).
 5. Use the **filter box** (top-right of the filter bar) to search live across all columns. Matching cells are highlighted.
 6. **Click any story row** to open it in the edit panel on the right.
+
 The currently loaded project, board, and sprint are shown in a label above the story table for reference while you work in the edit panel.
- 
+
 ### Table columns
- 
+
 By default the table shows KEY, SUMMARY, ASSIGNEE, STATUS, and DUE DATE. **Right-click the column header** to open a toggle menu and show or hide any of the following columns: ASSIGNEE, STATUS, DUE DATE, PTS, PRIORITY, TYPE, FEATURE LINK. KEY and SUMMARY are always visible. Column visibility resets to defaults each time stories are loaded.
- 
+
 The table supports **click-to-sort** on any column header.
- 
+
 **Right-clicking any story row** opens a context menu with the following actions:
- 
+
 | Action | Description |
 |---|---|
 | **⎋ Open in Jira** | Opens the story in your browser |
@@ -97,19 +99,19 @@ The table supports **click-to-sort** on any column header.
 | **⎘ Copy as Markdown** | Copies the story as a Markdown-formatted block |
 | **⧉ Duplicate Story** | Creates a copy of the story in the current project |
 | **→ To Do / In Progress / In Review / Done / Blocked** | Transition this story (or all selected stories) to the chosen status — see [Bulk status transitions](#bulk-status-transitions) |
- 
+
 ### Bulk status transitions
- 
+
 Select one or more rows in the table (hold `Shift` or `Ctrl` to multi-select), then right-click. The context menu shows either "Transition N stories to…" (for multi-selection) or single-story transition options. Click the target status to apply.
- 
+
 Each story's available transitions are fetched individually from Jira. SprintMate uses a fuzzy matching strategy to find the right transition — exact status name first, then starts-with, then contains, then transition name match — so non-standard Jira workflow names (e.g. "Start Progress" for an "In Progress" target) are handled automatically. If no match is found at all, the error message lists every available transition for that issue.
- 
+
 After all transitions complete, a summary reports how many succeeded, how many had no matching transition, and any errors. The sprint reloads automatically on completion.
- 
+
 ### Editing a story
- 
+
 The **▶ SAVE CHANGES** button is disabled until you make a change. Fields available for editing:
- 
+
 | Field | Notes |
 |---|---|
 | **Assignee** | Picked from all users on the instance |
@@ -122,56 +124,57 @@ The **▶ SAVE CHANGES** button is disabled until you make a change. Fields avai
 | **Status Transition** | Apply a workflow transition on save |
 | **Description** | Full plain-text edit |
 | **Add Comment** | Optional comment posted to the story on save |
- 
+
 The **RECENT COMMENTS** panel shows the five most recent comments on the selected story. Each entry displays the author's name, the date, and a truncated preview in the format `[2026-06-10] Jane Smith: Comment text…`. Click **⤢ Expand** to view a comment in full. Use **✎ Edit** or **✕ Delete** to modify or remove a posted comment.
- 
+
 The edit panel header includes the following controls:
- 
+
 | Control | Action |
 |---|---|
 | **⎘** | Copies the current issue key to the clipboard |
 | **⎋ Open in Jira** | Opens the current story in your browser |
 | **⎘ Clone** | Clone this story to a project or instance |
 | **📎 Attach File** | Opens a file picker to attach one or more files to the current story |
- 
+
 Click **▶ SAVE CHANGES** (or press `Ctrl+S`) — the app updates Jira and re-selects the saved story automatically.
- 
+
 > If Jira rejects the story points field on save (e.g. because it is read-only for the issue type), a warning dialog will explain that all other changes were saved but points were not.
- 
+
 > If you attempt to reload stories or close the app while there are unsaved changes in the edit panel, SprintMate will prompt you before discarding them. It will also warn if background operations are still in flight when you close.
- 
+
 ### Inline editing
- 
+
 You can update four fields directly from the table without opening the full edit panel:
- 
+
 - **Double-click the PTS cell** — a Fibonacci combo pop-up appears. Select a new value and click **Save**. The change is written to Jira immediately and the sprint reloads.
 - **Double-click the ASSIGNEE cell** — a team-member combo pop-up appears. Select a new assignee (or "— Unassigned —") and click **Reassign**. The change is written to Jira immediately and the sprint reloads.
 - **Double-click the STATUS cell** — a combo of the issue's available Jira transitions appears. Select one and click **Apply** to transition the issue immediately.
 - **Double-click the DUE DATE cell** — a calendar date-picker appears. Click **Save** to update the date, or **Clear Date** to remove it entirely.
+
 All four inline edits write directly to Jira and reload the sprint on confirmation.
- 
+
 ### Story ranking
- 
+
 The quick-add bar below the stories table includes **↑ Rank Up** and **↓ Rank Down** buttons. With a story selected in the table, clicking either moves it one position relative to its neighbour by calling `PUT /rest/agile/1.0/issue/rank`. The sprint reloads after a successful rank change.
- 
+
 If the board's ranking field is not writable (e.g. it uses a manual or external ranking scheme), a dialog explains the reason rather than failing silently.
- 
+
 ### Creating a story
- 
+
 Click **＋ New Story** (or press `Ctrl+N` or the `N` key with the table focused) in the filter bar to open the creation dialog. Fill in summary (required), issue type, priority, story points, assignee, sprint, due date, and description, then click **＋ Create Story**.
- 
+
 The story points dropdown includes: 0, 1, 2, 3, 5, 8, 13, 21. Values 13 and 21 are highlighted in amber with a "consider splitting" label.
- 
+
 ### Bulk-creating stories from CSV
- 
+
 Click **＋＋ Bulk Create** in the filter bar to create multiple stories at once from a CSV file.
- 
+
 **CSV format — header row required, column order does not matter:**
- 
+
 ```
 summary,issue_type,priority,story_points,assignee,sprint,due_date,description
 ```
- 
+
 | Column | Required | Notes |
 |---|---|---|
 | `summary` | **Yes** | Rows with a blank summary are skipped |
@@ -182,187 +185,193 @@ summary,issue_type,priority,story_points,assignee,sprint,due_date,description
 | `sprint` | No | Sprint name, matched case-insensitively; left unassigned if not found |
 | `due_date` | No | `yyyy-MM-dd` format; defaults to today if blank or invalid |
 | `description` | No | Plain text |
- 
+
 A preview dialog shows all parsed rows with their resolved values and any warnings before anything is posted. Click **▶ Create Stories** to proceed.
- 
+
 ### Switching instances
- 
+
 Click **⇄ Switch Instance** in the top bar to toggle between Primary and Secondary without opening settings. The app swaps credentials, clears the current view, and reloads projects automatically. A warning is shown if the target instance has no saved credentials.
- 
+
 ### Importing comments
- 
+
 Click **📄 Import** (or press `Ctrl+I`) to bulk-post comments from a text, Markdown, or CSV file.
- 
+
 **Text / Markdown format — one entry per line:**
- 
+
 ```
 KEY-123 - Task Summary - Assignee Name: Comment text here
 KEY-456 | Another Task | Jane Smith: Another comment here
 ```
- 
+
 Accepted field separators: `-`, `|`, `~`, `;`
- 
+
 **CSV format — header row required:**
- 
+
 ```
 key,summary,assignee,comment
 ```
- 
+
 A preview dialog shows all parsed entries with their match status before anything is posted:
- 
+
 - **Matched** entries (key found in the current sprint) are posted to the active instance.
 - **Unmatched** entries are skipped.
 - **Cross-post** — if a story with the same summary and assignee is found on the other instance, the comment is posted there too. Cross-post targets are highlighted in cyan in the preview.
+
 Progress is shown per-comment in the progress bar. Any failures are reported in the status bar at completion without aborting the rest of the batch.
- 
+
 ### Cloning a story
- 
+
 Click **⎘ Clone** in the edit panel header to open the clone dialog. The dialog has three sections:
- 
+
 - **Target Instance** — defaults to the current instance. If the other instance has saved credentials, it appears as a second option.
 - **Target Project** — a dropdown populated from the selected instance's project list, sorted alphabetically.
 - **Fields to clone** — Summary (pre-filled as `[Clone] Original summary`), Description, and Assignee, all editable before committing.
+
 Click **⎘ Clone** to create the issue. On success, a dialog shows the new issue key with **Copy Key** and **Open in Jira** action buttons.
- 
+
 ### Attaching files to a story
- 
+
 Click **📎 Attach File** in the edit panel header to upload one or more files directly to the current Jira issue. A file picker opens that accepts any file type and allows selecting multiple files at once. Each file is uploaded via the Jira REST API — a single failure does not stop the rest of the batch.
- 
+
 ### Archiving stories
- 
+
 Click **🗄 Archive** in the filter toolbar (enabled once stories are loaded) to archive one or more stories. A searchable, sortable picker dialog lists all stories in the sprint. Check the stories to archive and click **🗄 Archive Selected**. A confirmation dialog explains the consequences before anything is sent.
- 
+
 You can also press **Delete** with a story selected in the table to quick-archive it with a single confirm prompt.
- 
+
 Archived issues become read-only and are removed from boards, backlogs, and search results. All data is preserved and issues can be restored from Jira administration. Requires Jira Data Center 8.1 or later.
- 
+
 ### Editing and deleting comments
- 
+
 The RECENT COMMENTS panel includes two additional buttons when a story with comments is loaded:
- 
+
 - **✎ Edit** — opens a pre-filled text editor. If the story has more than one comment, a picker dialog lets you choose which one to edit.
 - **✕ Delete** — shows a preview in a confirmation dialog before permanently deleting. Jira's permission rules apply — you can only delete comments you authored unless you have admin rights.
+
 Both actions reload the story immediately so the comment panel reflects the change.
- 
+
 ### Generating a sprint report
- 
+
 Click **📊 Sprint Report** in the filter toolbar to open the report dialog. The dialog has two tabs.
- 
+
 **Sprint Report tab** — choose a scope then click **▶ Generate Sprint Report**:
- 
+
 - **Sprint** — select any sprint from the dropdown (pre-selected to the currently loaded sprint).
 - **Date Range** — enter From and To dates in `YYYY-MM-DD` format to fetch all issues updated within that window.
+
 The report is a dashboard-style HTML document with the following sections:
- 
+
 - **Header** — dark gradient panel with the sprint name, date range, generated date, and story/points summary.
 - **Summary** — five stat cards showing total stories, stories done, total points, points done, and a circular velocity ring with the completion percentage.
 - **Burndown** — SVG chart with a proper background grid, green-tinted ideal region, blue-tinted actual region, and an ahead/behind callout label at the current day marker (e.g. "▲ 8 pts ahead" or "▼ 3 pts behind").
 - **Status** — proportional horizontal stacked bar with a colour-coded legend.
 - **Team** — responsive grid of per-person cards showing avatar initials, story and points progress bars, and a done/remaining summary.
 - **All Stories** — table with sticky headers, pill-shaped status badges, colour-coded priority symbols, and full-row highlighting for overdue items.
+
 Overdue due dates highlight the entire row in red. Dates within 3 days are highlighted in amber.
- 
+
 **People Report tab** — generate an instance-wide report filtered by person:
- 
+
 - **Scope** — choose a sprint or a date range.
 - **People** — multi-select from the list of assignees on the current sprint, and/or type additional usernames (comma-separated) in the free-text box.
+
 The People Report shows a summary comparison table (stories, done, story progress, total points, done points, points progress, average cycle time, status breakdown per person), followed by a per-person detail section.
- 
+
 Both reports can be saved as HTML via **⬇ Save as HTML**. The exported file includes print CSS so it renders cleanly when printed or saved as PDF from the browser.
- 
+
 ### Velocity history
- 
+
 Click **📈 Velocity** in the Stories toolbar (enabled once stories are loaded) to open the velocity history dialog. It fetches up to N recent closed sprints and calculates committed points (total) and completed points (Done) for each one from the actual sprint issues.
- 
+
 The dialog shows a bar chart with paired bars per sprint (committed in blue, completed in green), a summary table, and a **⬇ Export CSV** button. Use the **Sprints to show** dropdown (3–10) to control how many sprints are included, then click **▶ Load** to refresh.
- 
+
 ### Comparing sprints
- 
+
 Select a sprint in the **Compare** dropdown in the filter toolbar and click **Compare**. SprintMate highlights rows that have changed (blue background) or are new since the comparison sprint (green background). Hovering the KEY cell shows a tooltip with a summary of what changed (status, assignee, story points).
- 
+
 After the comparison completes, SprintMate offers to export the diff as a CSV. The export includes one row per changed, added, or removed story with columns for key, change_type, and diffs. You can also trigger the export manually from the prompt that appears.
- 
+
 ### Managing sprints
- 
+
 Click **⊕ Sprint** in the filter toolbar (enabled once a board is loaded) to open the Sprint Manager dialog. It has two tabs.
- 
+
 **＋ Create tab** — fill in a sprint name (required), optional goal, start date, and end date. Choose whether to create the sprint as a future sprint or to create-and-start it immediately, then click **＋ Create Sprint**. Status is shown inline.
- 
+
 **⚙ Manage tab** — select any sprint from the board in the dropdown. Its current name, goal, and dates are pre-filled. Three actions are available:
- 
+
 | Button | Action | When available |
 |---|---|---|
 | **💾 Save Changes** | Rename, reschedule, or update the sprint goal | Always |
 | **▶ Start Sprint** | Starts the sprint (confirms dates; warns that only one sprint can be active at a time) | Future sprints only |
 | **■ Close Sprint** | Closes the sprint (confirms that incomplete stories remain on the board) | Active sprints only |
- 
+
 After any successful operation the sprint dropdown in the main window reloads automatically so the new state is reflected immediately.
- 
+
 > Starting a sprint requires **Manage Sprints** permission on the board. Only one sprint can be active per board at a time — Jira enforces this. If another sprint is already active, the start will fail with a clear error message.
- 
+
 ### Kanban board
- 
+
 Click **⊞ Active Sprint** in the top bar (or press `Alt+2`) to switch to the active sprint board view. The board heading and tab label both reflect the loaded sprint name (e.g. `⊞  Sprint 42`). They reset to `⊞  ACTIVE SPRINT` when no sprint is loaded.
- 
+
 Stories are displayed as cards in five columns: **To Do**, **In Progress**, **In Review**, **Done**, and **Blocked**. Each card shows the issue key, summary, assignee, and story points. The left border colour corresponds to the story's status.
- 
+
 **Filtering** — a filter bar sits below the board header with three controls that work together in real time:
- 
+
 | Control | Filters by |
 |---|---|
 | Text search | Issue key or summary substring |
 | Assignee | Team member (populated from loaded issues; selection preserved on refresh) |
 | Priority | Highest / High / Medium / Low / Lowest |
- 
+
 A **✕ Clear** button resets all three at once. A "Showing N of M" label appears whenever any filter is active.
- 
+
 **Drag a card** to a different column to trigger a Jira status transition. SprintMate uses fuzzy matching to find the correct transition — see [Bulk status transitions](#bulk-status-transitions) for the matching logic. If no match is found, the error message lists all available transitions and the card stays in its original column.
- 
+
 **Click a card** to switch back to the Stories tab with that story selected in the table.
- 
+
 The board header includes a **＋ New Story** button that opens the same story creation dialog as the Stories tab.
- 
+
 The board is populated from the currently loaded sprint and persists between tab switches — navigating away and back does not rebuild the cards unless the sprint data has changed.
- 
+
 ### Backlog view
- 
+
 Click **☰ Backlog** in the top bar (or press `Alt+3`) to switch to the Backlog view. Click **↺ Load Backlog** to fetch all open issues for the current project that have no sprint assigned.
- 
+
 Results display in a sortable, filterable table with columns for KEY, SUMMARY, ASSIGNEE, PRIORITY, PTS, TYPE, and DUE DATE. Use the filter box at the top to search live across all columns.
- 
+
 **Right-clicking any row** opens a context menu. Menu items adapt for single vs multi-selection:
- 
+
 | Action | Single selection | Multi-selection |
 |---|---|---|
 | **⎋ Open in Jira** | Opens the issue in your browser | Disabled |
 | **⎘ Copy Key** | Copies the key to the clipboard | Copies N keys comma-separated |
 | **⇧ Move to Sprint** | Moves the story to the selected sprint | Moves all selected stories |
- 
+
 **Move to Sprint** — you can also select one or more backlog stories, choose a target sprint from the dropdown (the active sprint is pre-selected), and click **⇧ Move**. Moved stories are removed from the backlog table immediately.
- 
+
 **Export CSV** — click **⬇ Export CSV** to save all loaded backlog items to a CSV file (key, summary, assignee, priority, story points, issue type, due date).
- 
+
 Clicking a backlog story that is also present in the currently loaded sprint switches to the Stories tab and selects that row.
- 
+
 ### Exporting stories
- 
+
 Click **⬇ Export** (or press `Ctrl+E`) to export the current sprint's stories to a CSV file. You can choose to export all stories or select specific ones using a basket-style picker.
- 
+
 The exported CSV includes:
- 
+
 ```
 key, summary, assignee, status, issue_type, priority, story_points,
 feature_link, due_date, sprint, description, comments
 ```
- 
+
 Comments are exported as a pipe-separated list in the format `[Author]: body text`.
- 
+
 ---
- 
+
 ## Keyboard Shortcuts
- 
+
 ### Global
- 
+
 | Shortcut | Action |
 |---|---|
 | `Ctrl+S` | Save changes (when save button is enabled) |
@@ -376,9 +385,9 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | `Alt+1` | Switch to Stories view |
 | `Alt+2` | Switch to Active Sprint board view |
 | `Alt+3` | Switch to Backlog view |
- 
+
 ### Table (when the story table has focus)
- 
+
 | Shortcut | Action |
 |---|---|
 | `N` | New Story |
@@ -389,11 +398,11 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | `↑` / `↓` | Navigate to previous / next story row |
 | `Ctrl+↑` / `Ctrl+↓` | Navigate to previous / next story row |
 | `Ctrl+C` | Copy visible columns of the selected row (comma-separated) |
- 
+
 ---
- 
+
 ## Top Bar
- 
+
 | Button | Action |
 |---|---|
 | **⚙ Configure** | Open the settings dialog |
@@ -403,13 +412,13 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | **⊞ Active Sprint** | Switch to the active sprint board view |
 | **☰ Backlog** | Switch to the Backlog view |
 | **⊕ Sprint** | Open the Sprint Manager (create, start, rename, close) |
- 
+
 ---
- 
+
 ## User Guide
- 
+
 ### How to set up and connect for the first time
- 
+
 1. Install dependencies with `pip install -r requirements.txt`, then run `python sprintmate.py`.
 2. Click **⚙ Configure** in the top bar.
 3. Use the **PRIMARY / SECONDARY** toggle to select the instance you want to set up first.
@@ -417,19 +426,21 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 5. Click **Test Connection** — you should see a green "Connected as …" confirmation.
 6. Click **Save**. Repeat steps 3–5 for the other instance if needed.
 7. The app will connect automatically and load your projects. Select a project, board, and sprint, then click **Load Stories**.
+
 ---
- 
+
 ### How to edit and save a story
- 
+
 1. Load a sprint (see above).
 2. Click any row in the table to open it in the edit panel on the right.
 3. Change any fields you need — assignee, priority, story points, due date, description, etc.
 4. Optionally select a **Status Transition** to move the story through its workflow, and/or type a comment in **Add Comment**.
 5. Press `Ctrl+S` or click **▶ SAVE CHANGES**. The story is updated in Jira and the table refreshes automatically.
+
 ---
- 
+
 ### How to quickly update a field inline
- 
+
 1. Load a sprint.
 2. Make sure the column you want to edit is visible (right-click any column header to toggle columns).
 3. **Double-click the cell** for the field you want to change:
@@ -438,41 +449,46 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
    - **STATUS** — available transitions combo; click **Apply**.
    - **DUE DATE** — calendar picker; click **Save** or **Clear Date**.
 4. The change is written to Jira immediately and the sprint reloads.
+
 ---
- 
+
 ### How to re-rank a story
- 
+
 1. Load a sprint.
 2. Click the story you want to move in the table.
 3. Click **↑ Rank Up** or **↓ Rank Down** in the bar below the table.
 4. The sprint reloads with the updated order. If the board doesn't support ranking, a dialog will explain why.
+
 ---
- 
+
 ### How to update multiple stories quickly
- 
+
 1. Load a sprint.
 2. Use the **filter box** (`Ctrl+F`) to narrow the table to the stories you want.
 3. Click the first story, make your changes, and press `Ctrl+S`.
 4. Click the next story in the table and repeat. Or use `↑` / `↓` to navigate rows and `S` to save.
+
 ---
- 
+
 ### How to transition multiple stories at once
- 
+
 1. Load a sprint.
 2. Select the stories to transition — click the first row, then `Shift`+click or `Ctrl`+click additional rows.
 3. Right-click and choose a status from the **"Transition N stories to…"** section of the context menu.
 4. SprintMate applies the best-matching Jira transition to each story and reports a summary on completion.
+
 ---
- 
+
 ### How to move a story to a different sprint
- 
+
 1. Click the story in the table to open it in the edit panel.
 2. In the **Sprint** dropdown (under STORY FIELDS), select the destination sprint.
 3. Press `Ctrl+S` or click **▶ SAVE CHANGES**. The story disappears from the current sprint view after the table refreshes.
+
 ---
- 
+
 ### How to use the active sprint board
- 
+
 1. Load a sprint.
 2. Click **⊞ Active Sprint** in the top bar (or press `Alt+2`). The tab and board heading show the sprint name.
 3. Stories appear as cards in their current status column.
@@ -480,10 +496,11 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 5. **Drag a card** to a new column to trigger a Jira status transition.
 6. **Click a card** to jump back to the Stories tab with that story selected.
 7. Use **＋ New Story** in the board header to create a story without leaving the board.
+
 ---
- 
+
 ### How to browse and groom the backlog
- 
+
 1. Select a project and board (stories don't need to be loaded first).
 2. Click **☰ Backlog** in the top bar (or press `Alt+3`).
 3. Click **↺ Load Backlog** to fetch all unsprinted open stories for the current project.
@@ -492,37 +509,41 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 6. To move stories into a sprint: select one or more rows, choose a sprint from the **Move to sprint** dropdown, and click **⇧ Move** (or use the right-click menu).
 7. To export the backlog: click **⬇ Export CSV**.
 8. Clicking a story that also exists in the active sprint switches to the Stories tab and highlights it.
+
 ---
- 
+
 ### How to view velocity history
- 
+
 1. Load a sprint (so the board ID is known).
 2. Click **📈 Velocity** in the Stories toolbar.
 3. Select the number of sprints to include (3–10) and click **▶ Load**.
 4. The dialog shows a bar chart of committed vs completed points per sprint and a summary table.
 5. Click **⬇ Export CSV** to save the data.
+
 ---
- 
+
 ### How to compare sprints and export the diff
- 
+
 1. Load a sprint.
 2. In the filter toolbar, choose a sprint to compare against from the **Compare** dropdown and click **Compare**.
 3. Changed rows are highlighted blue; new rows (not in the comparison sprint) are highlighted green. Hover any KEY cell for a tooltip showing what changed.
 4. When the comparison finishes, SprintMate offers to export the diff as CSV. Accept to save, or dismiss to skip.
+
 ---
- 
+
 ### How to create a sprint
- 
+
 1. Select a project and board.
 2. Click **⊕ Sprint** in the filter toolbar.
 3. Switch to the **＋ Create** tab.
 4. Enter a sprint name, optional goal, start date, and end date.
 5. Choose **Create as future sprint** or **Create and immediately start**.
 6. Click **＋ Create Sprint**. The sprint dropdown reloads automatically.
+
 ---
- 
+
 ### How to start, rename, or close a sprint
- 
+
 1. Select a project and board.
 2. Click **⊕ Sprint** in the filter toolbar.
 3. Switch to the **⚙ Manage** tab and select the sprint from the dropdown.
@@ -530,113 +551,126 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 5. To start a future sprint: click **▶ Start Sprint**, confirm the dates and the warning, then click **Yes**.
 6. To close an active sprint: click **■ Close Sprint**, confirm that incomplete stories will remain on the board, then click **Yes**.
 7. The sprint dropdown reloads after each successful action.
+
 ---
- 
+
 ### How to bulk-create stories from a spreadsheet
- 
+
 1. Prepare a CSV file with a header row. The only required column is `summary`; all others are optional:
-```
+   ```
    summary,issue_type,priority,story_points,assignee,sprint,due_date,description
-```
+   ```
 2. Load a sprint so that issue types, members, and sprints are available for validation.
 3. Click **＋＋ Bulk Create** and select your CSV file.
 4. Review the preview dialog — each row shows its resolved values and any warnings. Rows with a blank summary are highlighted and will be skipped.
 5. Click **▶ Create Stories**.
+
 ---
- 
+
 ### How to export a sprint to CSV
- 
+
 1. Load the sprint you want to export.
 2. Click **⬇ Export** (or press `Ctrl+E`).
 3. Choose **Yes** to export all stories, or **No** to open the selection picker.
 4. Choose a save location — the filename is pre-filled based on the project, board, sprint, and today's date.
+
 ---
- 
+
 ### How to import comments in bulk
- 
+
 1. Prepare a file with one comment per entry (text/Markdown or CSV format — see [Importing comments](#importing-comments) above).
 2. Load the sprint that contains the stories you want to comment on.
 3. Click **📄 Import** (or press `Ctrl+I`) and select your file.
 4. Review the preview dialog and click **OK** to post.
+
 ---
- 
+
 ### How to clone a story
- 
+
 1. Load a sprint and click the story you want to clone.
 2. Click **⎘ Clone** in the edit panel header.
 3. Select a target instance and target project.
 4. Review and edit the summary, description, and assignee as needed.
 5. Click **⎘ Clone**. On success, a dialog shows the new issue key with options to **Copy Key** or **Open in Jira**.
+
 ---
- 
+
 ### How to attach a file to a story
- 
+
 1. Load a sprint and click the story you want to attach a file to.
 2. Click **📎 Attach File** in the edit panel header.
 3. Select one or more files in the file picker — any file type is accepted.
 4. SprintMate uploads each file to the Jira issue and reports success or failure per file.
+
 ---
- 
+
 ### How to archive stories
- 
+
 1. Load the sprint containing the stories you want to archive.
 2. Either:
    - Click **🗄 Archive** in the filter toolbar, tick the stories to archive, and click **🗄 Archive Selected**; or
    - Select a single story in the table and press **Delete** for a quick confirm-and-archive.
 3. Archived stories are removed from the sprint view immediately.
+
 ---
- 
+
 ### How to edit or delete a posted comment
- 
+
 1. Click the story whose comment you want to change.
 2. In the **RECENT COMMENTS** panel, click **✎ Edit** or **✕ Delete**.
 3. If the story has more than one comment, a picker dialog appears — select the comment you want to act on.
 4. **Edit** — modify the text and click **Save Comment**. **Delete** — review the preview and click **Yes**.
 5. The story reloads automatically.
+
 ---
- 
+
 ### How to generate a sprint report
- 
+
 1. Load a sprint and click **📊 Sprint Report** in the filter toolbar.
 2. Select a scope — choose a sprint from the dropdown or switch to Date Range.
 3. Click **▶ Generate Sprint Report**. The report renders with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a status stacked bar, a team card grid, and a full story table.
 4. Optionally click **⬇ Save as HTML** to save to a file. The exported HTML includes print CSS for clean printing or PDF export from the browser.
+
 ---
- 
+
 ### How to generate a people report
- 
+
 1. Load a sprint and click **📊 Sprint Report** in the filter toolbar.
 2. Switch to the **👤 People Report** tab.
 3. Select a scope — a sprint or date range.
 4. Select people from the list and/or type additional usernames in the free-text box.
 5. Click **▶ Generate People Report**. Optionally click **⬇ Save as HTML**.
+
 ---
- 
+
 ### How to set a custom instance display name
- 
+
 1. Click **⚙ Configure** in the top bar.
 2. Select the instance using the **PRIMARY / SECONDARY** toggle.
 3. Enter a name in the **Display Name** field (e.g. "Production", "Staging").
 4. Click **Save**. The name replaces "Primary" / "Secondary" everywhere in the app. Leave it blank to revert to the default label.
+
 ---
- 
+
 ### How to switch between instances
- 
+
 1. Click **⇄ Switch Instance** in the top bar at any time.
 2. The app swaps to the other instance, clears the current view, and reloads your projects automatically.
 3. If the target instance has no saved credentials, you will be prompted to configure it first.
+
 ---
- 
+
 ### How to copy a story to the clipboard
- 
+
 - **`Ctrl+C`** (with the table focused) — copies the visible columns of the selected row as a comma-separated line.
 - **`Ctrl+Shift+C`** — copies the full story as a CSV-ready row matching the export format.
 - **`Ctrl+Shift+M`** — copies the selected row as a Markdown-formatted block.
 - The **⎘** button in the edit panel header copies just the issue key (e.g. `PROJECT1-123`).
+
 ---
- 
+
 ## Notes
- 
+
 - The app targets **Jira Data Center** exclusively and uses the **REST API v2** and the **Agile API v1.0** for boards, sprints, and ranking.
 - All API calls run on background threads — the UI stays responsive during loads. A maximum of 5 background operations can run concurrently. Failed operations show a **↩ Retry** button in the error dialog where supported.
 - Settings (URLs, default project/board, token expiry, project/board filters) are stored via `QSettings` (registry on Windows, `~/.config` on Linux, `~/Library/Preferences` on macOS). PAT tokens are stored in the OS keychain when `keyring` is available.
