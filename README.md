@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.24.0
+# SprintMate  ◈  v2.25.0
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -262,17 +262,22 @@ The Reports toolbar contains:
 | **SPRINT** dropdown | Select which sprint to report on (pre-filled with all board sprints; active sprint pre-selected) |
 | **📊 Sprint Report** | Generate the full dashboard-style sprint report |
 | **👤 People Report** | Generate a per-person breakdown using the current sprint's assignees |
-| **📈 Velocity** | Generate a velocity history table (last 8 closed sprints) |
+| **📈 Velocity** | Generate the velocity history bar chart and table |
+| **📉 Burndown** | Generate a standalone burndown chart for the active sprint |
 | **COMPARE** dropdown + **⇆ Compare** | Compare the loaded sprint against another sprint |
 | **⬇ Save HTML** | Save the currently displayed report to an HTML file (enabled after generation) |
 
-**Sprint Report** — renders a dashboard-style HTML report with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a proportional status stacked bar, a team card grid with per-person progress bars, and a full story table with sticky headers, status badges, and overdue row highlighting.
+Each button switches to its own sub-tab and generates into it. Sub-tabs persist their content — switching between them does not lose a generated report. The **⬇ Save HTML** button always saves whichever sub-tab is currently visible.
 
-**People Report** — generates a per-assignee summary table (stories, done, story progress, total points, done points, points progress, status breakdown) followed by a per-person detail section. Uses all assignees from the currently loaded sprint.
+**📊 Sprint Report** — full dashboard HTML with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a proportional status stacked bar, a team card grid with per-person progress bars, and a story table with sticky headers, status badges, and overdue row highlighting.
 
-**Velocity** — shows a table of the last 8 closed sprints with total points committed, points completed, story count, done count, and completion percentage.
+**👤 People Report** — per-assignee summary table (stories, done, story progress, total points, done points, points progress, status breakdown) followed by a per-person detail section. Uses all assignees from the currently loaded sprint.
 
-**Compare** — select a sprint from the dropdown and click **⇆ Compare** to highlight rows that have changed (blue) or are new (green) since the comparison sprint. Hover the KEY cell for a tooltip showing what changed. After comparing, SprintMate offers to export the diff as a CSV.
+**📈 Velocity** — a native SVG bar chart (committed vs completed per sprint, scales with the window) above a summary table of the last 8 closed sprints. Requires `PyQt6-Qt6-Svg` for the chart; the table is always available.
+
+**📉 Burndown** — a standalone burndown chart for the active sprint, showing the ideal line vs actual remaining points with an ahead/behind callout. Below the chart, a stat strip shows total points, done, remaining, completion %, and stories done. The burndown inside Sprint Report is unchanged — this sub-tab gives it a dedicated view.
+
+**⇆ Compare** — after comparing, results render here as an HTML summary with added/changed/removed stat pills and a colour-coded diff table. SprintMate switches to this sub-tab automatically after the comparison completes.
 
 All reports can be saved as HTML via **⬇ Save HTML**. The sprint report HTML includes print CSS for clean printing or PDF export from the browser.
 
@@ -685,6 +690,15 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 2. Select a sprint from the **SPRINT** dropdown.
 3. Click **📊 Sprint Report**. The report renders inline with a dark header, stat cards, burndown chart, status stacked bar, team card grid, and full story table.
 4. Click **⬇ Save HTML** to save the report to a file. The exported HTML includes print CSS for clean printing or PDF export from the browser.
+
+---
+
+### How to view the burndown chart
+
+1. Load a sprint.
+2. Click **📊 Reports** in the top bar (or press `Alt+4`).
+3. Click **📉 Burndown**. The chart renders in its own sub-tab showing the ideal vs actual burndown with an ahead/behind callout and a stat strip.
+4. The burndown is also available inside the full Sprint Report — the dedicated sub-tab just gives it more space.
 
 ---
 
