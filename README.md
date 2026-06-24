@@ -453,7 +453,7 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 ### How to set up and connect for the first time
 
 1. Install dependencies with `pip install -r requirements.txt`, then run `python sprintmate.py`.
-2. Click **Help → Configure…** in the menu bar.
+2. Click **Menu → Configure…** in the menu bar.
 3. Use the **PRIMARY / SECONDARY** toggle to select the instance you want to set up first.
 4. Enter the **Jira URL** and your **PAT Token**. Optionally set a **Token Expiry** date, a **Default Project**, and a **Default Board** so the app pre-selects them on every launch.
 5. Click **Test Connection** — you should see a green "Connected as …" confirmation.
@@ -698,7 +698,7 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 
 ### How to set a custom instance display name
 
-1. Click **Help → Configure…** in the menu bar.
+1. Click **Menu → Configure…** in the menu bar.
 2. Select the instance using the **PRIMARY / SECONDARY** toggle.
 3. Enter a name in the **Display Name** field (e.g. "Production", "Staging").
 4. Click **Save**. The name replaces "Primary" / "Secondary" everywhere in the app. Leave it blank to revert to the default label.
@@ -707,7 +707,7 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 
 ### How to switch between instances
 
-1. Click **⇄ Switch Instance** in the top bar (or **Help → Configure…** to change settings).
+1. Click **⇄ Switch Instance** in the top bar (or **Menu → Configure…** to change settings).
 2. The app swaps to the other instance, clears the current view, and reloads your projects automatically.
 3. If the target instance has no saved credentials, you will be prompted to configure it first.
 
