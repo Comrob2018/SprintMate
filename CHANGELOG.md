@@ -1,4 +1,10 @@
 # SprintMate Changelog
+## [2.26.0] — 2026-06-24
+### Features
+* **Backlog project and board selectors.** The Backlog tab now has the same load bar as the Active Sprint board — a PROJECT dropdown, a BOARD dropdown, and a **↺ Load Backlog** button sit at the top of the tab. The dropdowns are pre-filled from whatever the Stories tab has selected and sync automatically whenever boards finish loading, issues finish loading, or the user switches to the Backlog tab. The old external Load Backlog button in the MainWindow toolbar has been removed — the button now lives inside the widget. Clicking **↺ Load Backlog** syncs the selected project and board back to the Stories tab combos and triggers the same `_load_backlog()` path as before. A new `_switch_to_backlog()` method replaces the bare `lambda: self.tabs.setCurrentIndex(2)` used previously, ensuring combos are always in sync when the tab is opened via the toolbar button or `Alt+3`.
+
+---
+ 
 ## [2.25.3] — 2026-06-23
 ### Bug Fixes
 * **QTextBrowser white box fixed with QPalette.** The dark CSS override injected by `_dark_html()` was not enough — `QTextBrowser` uses `QPalette.ColorRole.Base` to paint its document canvas, which `setStyleSheet` cannot override. A new module-level `_apply_dark_palette()` function explicitly sets `Base`, `Window`, `Text`, and `AlternateBase` colour roles to the app's dark theme constants and calls `setAutoFillBackground(True)`. It is called on all six report browsers: `_browser` and `_people_browser` in `SprintReportDialog`, and all four sub-tab browsers (`_rpt_sprint_browser`, `_rpt_people_browser`, `_rpt_compare_browser`, `_rpt_burndown_browser`) in the Reports tab. Defined as a module-level function so both `SprintReportDialog` and `MainWindow` can call it without inheritance.
