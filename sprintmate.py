@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.25.1"
+APP_VERSION  = "2.25.3"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -2480,6 +2480,20 @@ class ExportStoriesDialog(QDialog):
 
 
 # ── Sprint Report Dialog ──────────────────────────────────────────────────────
+def _apply_dark_palette(browser, bg: str = None, base: str = None):
+    """Force a QTextBrowser to use dark colours for its document background.
+    setStyleSheet alone does not override the Base palette role that
+    QTextBrowser uses to paint its document area."""
+    bg   = bg   or DARK_BG
+    base = base or PANEL_BG
+    pal  = browser.palette()
+    pal.setColor(QPalette.ColorRole.Base,          QColor(base))
+    pal.setColor(QPalette.ColorRole.Window,        QColor(bg))
+    pal.setColor(QPalette.ColorRole.Text,          QColor(TEXT_PRI))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(CARD_BG))
+    browser.setPalette(pal)
+    browser.setAutoFillBackground(True)
+
 class SprintReportDialog(QDialog):
     """Sprint report dialog with two tabs: Sprint Report and People Report."""
 
@@ -2579,6 +2593,7 @@ class SprintReportDialog(QDialog):
             f"QTextBrowser {{ background: {DARK_BG}; color: {TEXT_PRI}; "
             f"border: 1px solid {BORDER}; border-radius: 6px; }}"
         )
+        _apply_dark_palette(self._browser)
         sprint_layout.addWidget(self._browser, 1)
 
         sprint_btn_row = QHBoxLayout()
@@ -2689,6 +2704,7 @@ class SprintReportDialog(QDialog):
             f"QTextBrowser {{ background: {DARK_BG}; color: {TEXT_PRI}; "
             f"border: 1px solid {BORDER}; border-radius: 6px; }}"
         )
+        _apply_dark_palette(self._people_browser)
         people_layout.addWidget(self._people_browser, 1)
 
         people_btn_row = QHBoxLayout()
@@ -5624,6 +5640,7 @@ class MainWindow(QMainWindow):
         self._rpt_sprint_browser = QTextBrowser()
         self._rpt_sprint_browser.setOpenExternalLinks(True)
         self._rpt_sprint_browser.setStyleSheet(_browser_style)
+        _apply_dark_palette(self._rpt_sprint_browser)
         srt_layout.addWidget(self._rpt_sprint_browser, 1)
         self._reports_tabs.addTab(sprint_rpt_tab, "📊  Sprint Report")
 
@@ -5702,6 +5719,7 @@ class MainWindow(QMainWindow):
         self._rpt_people_browser = QTextBrowser()
         self._rpt_people_browser.setOpenExternalLinks(True)
         self._rpt_people_browser.setStyleSheet(_browser_style)
+        _apply_dark_palette(self._rpt_people_browser)
         prt_layout.addWidget(self._rpt_people_browser, 1)
         self._reports_tabs.addTab(people_rpt_tab, "👤  People Report")
 
@@ -5771,6 +5789,7 @@ class MainWindow(QMainWindow):
         self._rpt_compare_browser.setStyleSheet(
             f"QTextBrowser {{ background: {DARK_BG}; border: none; color: {TEXT_PRI}; }}"
         )
+        _apply_dark_palette(self._rpt_compare_browser)
         cmp_layout.addWidget(self._rpt_compare_browser)
         self._reports_tabs.addTab(compare_tab, "⇆  Compare")
 
@@ -5790,6 +5809,7 @@ class MainWindow(QMainWindow):
         self._rpt_burndown_browser.setStyleSheet(
             f"QTextBrowser {{ background: {DARK_BG}; border: none; color: {TEXT_PRI}; }}"
         )
+        _apply_dark_palette(self._rpt_burndown_browser)
         bd_layout.addWidget(self._rpt_burndown_browser, 1)
         self._reports_tabs.addTab(burndown_tab, "📉  Burndown")
 
