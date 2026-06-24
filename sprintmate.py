@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.21.0"
+APP_VERSION  = "2.21.1"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -384,7 +384,7 @@ QTabBar::tab:hover:!selected {{
 class JiraClient:
     """Supports both Jira Cloud (Basic auth, API v3) and Data Center/Server (Bearer PAT, API v2)."""
     MODE_SECONDARY = "Secondary"
-    MODE_PRIMARY = "Primary"
+    MODE_PRIMARY     = "Primary"
 
     # mappings
     _FIELD_MAP = {
@@ -5239,7 +5239,13 @@ class MainWindow(QMainWindow):
         self.quick_add_edit.setPlaceholderText("＋ Quick-add story summary… (Enter to create)")
         self.quick_add_edit.setEnabled(False)
         self.quick_add_edit.returnPressed.connect(self._quick_add_story)
-        _qbl.addWidget(self.quick_add_edit)
+        _qbl.addWidget(self.quick_add_edit, 1)
+        self.quick_add_type_combo = QComboBox()
+        self.quick_add_type_combo.setMinimumWidth(110)
+        self.quick_add_type_combo.setMaximumWidth(140)
+        self.quick_add_type_combo.setEnabled(False)
+        self.quick_add_type_combo.setToolTip("Issue type for quick-add")
+        _qbl.addWidget(self.quick_add_type_combo)
         # Rank buttons
         self._rank_up_btn = QPushButton("↑ Rank Up")
         self._rank_up_btn.setObjectName("toolbar_btn")
@@ -6308,6 +6314,8 @@ class MainWindow(QMainWindow):
         self.archive_btn.setEnabled(False)
         self.quick_add_edit.setEnabled(False)
         self.quick_add_edit.clear()
+        self.quick_add_type_combo.setEnabled(False)
+        self.quick_add_type_combo.clear()
         self.compare_combo.setEnabled(False)
         self.compare_combo.clear()
         self.compare_btn.setEnabled(False)
@@ -6600,7 +6608,10 @@ class MainWindow(QMainWindow):
         )
         self._spawn(
             self._client.get_issue_types, key,
-            on_result=lambda types: self.edit_panel.set_issue_types(types),
+            on_result=lambda types: (
+                self.edit_panel.set_issue_types(types),
+                self._populate_quick_add_types(types),
+            ),
             on_error=lambda e: self._on_issue_types_load_error(key, e),
         )
         self._refresh_users_cache()
@@ -7817,24 +7828,51 @@ class MainWindow(QMainWindow):
             errors = result.get("errorMessages", []) if isinstance(result, dict) else []
             QMessageBox.critical(self, "Duplicate Failed", "\n".join(errors) or "Unknown error.")
 
+    def _populate_quick_add_types(self, issue_types: list):
+        self.quick_add_type_combo.blockSignals(True)
+        self.quick_add_type_combo.clear()
+        for it in issue_types:
+            self.quick_add_type_combo.addItem(it.get("name", "?"), it)
+        # Default to Story if present, otherwise first type
+        for i in range(self.quick_add_type_combo.count()):
+            if self.quick_add_type_combo.itemText(i).lower() == "story":
+                self.quick_add_type_combo.setCurrentIndex(i)
+                break
+        self.quick_add_type_combo.blockSignals(False)
+        self.quick_add_type_combo.setEnabled(True)
+
     def _quick_add_story(self):
         summary = self.quick_add_edit.text().strip()
-        if not summary or not self._client: return
-        types = [self.edit_panel.issuetype_combo.itemData(i)
-                 for i in range(self.edit_panel.issuetype_combo.count())
-                 if self.edit_panel.issuetype_combo.itemData(i)]
-        if not types:
-            QMessageBox.warning(self, "Quick Add", "No issue types loaded."); return
+        if not summary or not self._client:
+            return
+        # Use the selected type from the quick-add combo
+        itype_data = self.quick_add_type_combo.currentData()
+        if itype_data:
+            itype = itype_data
+        else:
+            # Fallback: first type from edit panel combo
+            types = [self.edit_panel.issuetype_combo.itemData(i)
+                     for i in range(self.edit_panel.issuetype_combo.count())
+                     if self.edit_panel.issuetype_combo.itemData(i)]
+            if not types:
+                QMessageBox.warning(self, "Quick Add", "No issue types loaded.")
+                return
+            itype = {"id": types[0], "name": self.edit_panel.issuetype_combo.itemText(0)}
         self.quick_add_edit.clear()
         self.quick_add_edit.setEnabled(False)
-        self._busy(True); self._status("Creating story…")
+        self._busy(True)
+        self._status(f"Creating {itype.get('name', 'story')}…")
         self._spawn(self._client.create_issue,
-            self.project_combo.currentData(), summary, types[0], "", None, None, None,
+            self.project_combo.currentData(), summary, itype, "", None, None, None,
             self.sprint_combo.currentData(), None,
             on_result=lambda r: self._on_quick_add_done(r),
-            on_error=lambda e: (self._busy(False), self.quick_add_edit.setEnabled(True),
+            on_error=lambda e: (
+                self._busy(False),
+                self.quick_add_edit.setEnabled(True),
                 self._status("✗ Quick add failed."),
-                QMessageBox.critical(self, "Quick Add Failed", str(e))))
+                QMessageBox.critical(self, "Quick Add Failed", str(e)),
+            )
+        )
 
     def _on_quick_add_done(self, result):
         self._busy(False)
