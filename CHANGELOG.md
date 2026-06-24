@@ -1,4 +1,17 @@
 # SprintMate Changelog
+## [2.25.3] — 2026-06-23
+### Bug Fixes
+* **QTextBrowser white box fixed with QPalette.** The dark CSS override injected by `_dark_html()` was not enough — `QTextBrowser` uses `QPalette.ColorRole.Base` to paint its document canvas, which `setStyleSheet` cannot override. A new module-level `_apply_dark_palette()` function explicitly sets `Base`, `Window`, `Text`, and `AlternateBase` colour roles to the app's dark theme constants and calls `setAutoFillBackground(True)`. It is called on all six report browsers: `_browser` and `_people_browser` in `SprintReportDialog`, and all four sub-tab browsers (`_rpt_sprint_browser`, `_rpt_people_browser`, `_rpt_compare_browser`, `_rpt_burndown_browser`) in the Reports tab. Defined as a module-level function so both `SprintReportDialog` and `MainWindow` can call it without inheritance.
+
+---
+ 
+## [2.25.2] — 2026-06-23
+### Bug Fixes
+* **Reports tab dark theme.** All five report sub-tabs now match the velocity tab's dark appearance. A new `_dark_html()` helper injects a `<style>` block overriding `body`, card surfaces, table headers, rows, and link colours to the app's dark theme constants before loading HTML into any `QTextBrowser`. All `!important` overrides ensure the injected styles beat the report's own CSS. The Compare and Burndown sub-tab containers are now wrapped in dark `QWidget` backgrounds with `border: none` on the browser, matching the velocity tab layout exactly.
+* **Export preserves light theme.** `_reports_html_map` stores the original unmodified light-theme HTML. `_reports_save_html` reads from that map, so exported HTML files always use the full light dashboard design — the dark override is only applied for in-app display.
+
+---
+
 ## [2.25.1] — 2026-06-23
 ### Bug Fixes
 * **`_build_report` and `_build_burndown_svg` indentation fixed.** Both methods were indented 8 spaces (nested inside another method body) instead of 4 (class-level), causing an `AttributeError` when the Reports tab tried to call them. Corrected by stripping 4 spaces from every line in the affected block.
