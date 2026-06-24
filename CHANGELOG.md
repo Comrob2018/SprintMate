@@ -1,4 +1,15 @@
 # SprintMate Changelog
+## [2.23.1] — 2026-06-23
+### Bug Fixes & Polish
+* **`_copy_key` and `_undo_save` restored.** Both methods were lost during a prior edit that merged the body of `_undo_save` into `_copy_key` with no `def` header, causing an `AttributeError` on startup. Both are now separate, correctly-defined methods.
+* **Recent stories list persists across sessions.** `_recent_keys` is now written to `QSettings` as a JSON array in `_save_settings` and restored in `_load_settings`. The list is also saved on every clean app close via `closeEvent`. Previously it reset to empty on every launch.
+* **Column visibility preferences persist across sessions.** `_column_prefs` (a `dict[board_id -> set[col_indices]]`) is now serialised to JSON and saved to `QSettings` on settings save and on app close. It is restored on launch, so per-board column preferences survive restarts.
+* **Settings (including new persistence fields) now saved on close.** `closeEvent` now calls `_save_settings()` before accepting, ensuring recent keys and column prefs are written even when the user closes without changing any connection settings.
+* **Removed dead `_get_issue_links` method.** This method was added as a helper but was never called — the story links panel reads directly from the `issuelinks` field already fetched with each sprint load. The dead code has been removed.
+* **Improved duplicate detection in quick-add.** `_check_quick_add_duplicate` was rewritten with three improvements: (1) case-insensitive, punctuation-stripped word comparison instead of raw `str.split()`; (2) a stop-word list (articles, prepositions, conjunctions) is excluded before comparing, preventing false positives like "Add a button to the form" vs "Add a field to the form"; (3) a minimum of 3 meaningful words is required before the check runs, avoiding false positives on very short summaries. Threshold raised from 60% to 65%.
+
+---
+
 ## [2.23.0] — 2026-06-23
 ### Features
 * **Kanban board load toolbar.** The Active Sprint board now shows a compact load toolbar at the top when no stories are loaded, instead of just showing an empty board. The toolbar contains PROJECT, BOARD, and SPRINT dropdowns and a **↺ Load** button, with a hint label reading "Select a sprint and click Load to populate the board."
