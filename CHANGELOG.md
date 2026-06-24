@@ -1,4 +1,12 @@
 # SprintMate Changelog
+## [2.25.1] — 2026-06-23
+### Bug Fixes
+* **`_build_report` and `_build_burndown_svg` indentation fixed.** Both methods were indented 8 spaces (nested inside another method body) instead of 4 (class-level), causing an `AttributeError` when the Reports tab tried to call them. Corrected by stripping 4 spaces from every line in the affected block.
+* **Sprint Report and People Report sub-tab scope controls added.** Both sub-tabs previously had no way to pick a sprint or date range — clicking Generate always used the currently loaded sprint with no user input. Each sub-tab now has a compact scope bar containing Sprint / Date Range radio buttons, a sprint selector dropdown (pre-filled from all board sprints, active sprint pre-selected), From / To date fields, a people multi-select list (People Report only, populated from the loaded sprint's assignees with all selected by default), an extra usernames field, and a **▶ Generate** button. The toolbar **📊 Sprint Report** and **👤 People Report** buttons still work as shortcuts — they switch to the relevant sub-tab and trigger generation using whatever scope is already set there.
+* **Report browser and HTML backgrounds fixed.** `SprintReportDialog._browser` and `._people_browser` had hardcoded `background: #ffffff` CSS — corrected to use `DARK_BG` with a proper `QTextBrowser { }` selector. All HTML report `body` backgrounds changed from `#f6f8fa` / `#ffffff` to `transparent` so the dark widget background shows through cleanly. `@media print` blocks retain `background: #fff` for correct print output.
+
+---
+ 
 ## [2.25.0] — 2026-06-23
 ### Features
 * **Reports tab restructured with five sub-tabs.** The single `QTextBrowser` that previously swapped content on each button click has been replaced with a `QTabWidget` inside the Reports tab. Each sub-tab persists its content independently — switching between them does not lose a generated report. The five sub-tabs are:
