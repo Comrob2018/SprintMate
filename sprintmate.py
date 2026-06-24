@@ -9407,53 +9407,69 @@ class MainWindow(QMainWindow):
                     ))
 
     def _dark_html(self, html: str) -> str:
-        """Inject a dark-theme CSS override into an HTML report for in-app display.
+        """Rewrite an HTML report's colour values for dark in-app display.
+        Direct substitution is used instead of CSS cascade because QTextBrowser's
+        built-in HTML renderer has limited support for !important and pseudo-selectors.
         The original light-theme HTML is preserved separately for export."""
-        dark_css = f"""<style>
-/* Dark theme override for in-app display */
-body {{
-    background: {DARK_BG} !important;
-    color: {TEXT_PRI} !important;
-}}
-.report-header {{
-    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%) !important;
-}}
+
+        # Map of light → dark colour substitutions applied to the HTML string.
+        # Order matters — more specific colours first.
+        substitutions = [
+            # Body / page background
+            ('background: #f6f8fa;',          f'background: {DARK_BG};'),
+            ('background:#f6f8fa;',            f'background:{DARK_BG};'),
+            ('background: transparent;',       f'background: {DARK_BG};'),
+            ('background:transparent;',        f'background:{DARK_BG};'),
+            # Card / panel surfaces
+            ('background: #ffffff;',           f'background: {PANEL_BG};'),
+            ('background:#ffffff;',            f'background:{PANEL_BG};'),
+            ('background: #fff;',              f'background: {PANEL_BG};'),
+            ('background:#fff;',               f'background:{PANEL_BG};'),
+            # Table header
+            ('background: #f6f8fa;',           f'background: {CARD_BG};'),
+            ('background:#f6f8fa;',            f'background:{CARD_BG};'),
+            # Row hover (needs to be dark too)
+            ('background: #f6f8fa !important', f'background: {CARD_BG} !important'),
+            # Text colours
+            ('color: #1f2328;',                f'color: {TEXT_PRI};'),
+            ('color:#1f2328;',                 f'color:{TEXT_PRI};'),
+            ('color: #57606a;',                f'color: {TEXT_SEC};'),
+            ('color:#57606a;',                 f'color:{TEXT_SEC};'),
+            ('color: #8b949e;',                f'color: {TEXT_DIM};'),
+            ('color:#8b949e;',                 f'color:{TEXT_DIM};'),
+            # Border colours
+            ('border: 1px solid #d0d7de;',     f'border: 1px solid {BORDER};'),
+            ('border:1px solid #d0d7de;',      f'border:1px solid {BORDER};'),
+            ('border-bottom: 1px solid #d0d7de;', f'border-bottom: 1px solid {BORDER};'),
+            ('border-bottom:1px solid #d0d7de;',  f'border-bottom:1px solid {BORDER};'),
+            ('border-bottom: 1px solid #f0f0f0;', f'border-bottom: 1px solid {BORDER};'),
+            ('border-bottom:1px solid #f0f0f0;',  f'border-bottom:1px solid {BORDER};'),
+            # Box shadows — remove them (dark theme doesn't need them)
+            ('box-shadow: 0 1px 3px rgba(0,0,0,.04);', ''),
+            # Section heading rule colour
+            ('background: #d0d7de;',           f'background: {BORDER};'),
+            ('background:#d0d7de;',            f'background:{BORDER};'),
+        ]
+
+        result = html
+        for old, new in substitutions:
+            result = result.replace(old, new)
+
+        # Also inject a minimal <style> block for any colours we can't reach
+        # via simple substitution (e.g. pseudo-selectors in the report's own CSS)
+        extra_css = f"""<style>
+body {{ background: {DARK_BG} !important; color: {TEXT_PRI} !important; }}
+thead th {{ background: {CARD_BG} !important; color: {TEXT_SEC} !important; }}
+tbody tr:hover td {{ background: {CARD_BG} !important; }}
 .stat-card, .card, .assignee-card, .table-wrap, .burndown-card {{
-    background: {PANEL_BG} !important;
-    border-color: {BORDER} !important;
-    color: {TEXT_PRI} !important;
-}}
-.card-title, .stat-val, .stat-lbl {{
-    color: {TEXT_PRI} !important;
-}}
-.stat-sub, .section-heading {{
-    color: {TEXT_SEC} !important;
-}}
-.section-heading::after {{
-    background: {BORDER} !important;
-}}
-table {{
-    background: {PANEL_BG} !important;
-    color: {TEXT_PRI} !important;
-}}
-thead th {{
-    background: {CARD_BG} !important;
-    color: {TEXT_SEC} !important;
-    border-color: {BORDER} !important;
-}}
-tbody td {{
-    border-color: {BORDER} !important;
-    color: {TEXT_PRI} !important;
-}}
-tbody tr:hover td {{
-    background: {CARD_BG} !important;
+    background: {PANEL_BG} !important; border-color: {BORDER} !important;
 }}
 a {{ color: {ACCENT_CYAN} !important; }}
 </style>"""
-        # Inject after <head> or at the top of <body>
-        if '<head>' in html:
-            return html.replace('<head>', f'<head>{dark_css}', 1)
-        return dark_css + html
+        if '<head>' in result:
+            result = result.replace('<head>', f'<head>{extra_css}', 1)
+
+        return result
 
     def _reports_generate_burndown(self):
         """Generate a standalone burndown chart in the Burndown sub-tab."""
