@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.23.1
+# SprintMate  ◈  v2.24.0
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -63,13 +63,14 @@ Click **Test Connection** to verify credentials before saving. Click **Save** to
 
 ### Views
 
-SprintMate has three views, switchable via the top bar buttons or keyboard shortcuts:
+SprintMate has four views, switchable via the top bar buttons or keyboard shortcuts:
 
 | View | Button | Shortcut | Description |
 |---|---|---|---|
 | **◈ Stories** | ◈ Stories | `Alt+1` | The main sortable/filterable story table with edit panel |
-| **⊞ Kanban** | ⊞ Kanban | `Alt+2` | Drag-and-drop board with one column per status |
+| **⊞ Active Sprint** | ⊞ Active Sprint | `Alt+2` | Drag-and-drop board with one column per status |
 | **☰ Backlog** | ☰ Backlog | `Alt+3` | All open stories not assigned to any sprint |
+| **📊 Reports** | 📊 Reports | `Alt+4` | Sprint report, people report, velocity history, and sprint compare |
 
 ### Navigating stories
 
@@ -250,40 +251,30 @@ The RECENT COMMENTS panel includes two additional buttons when a story with comm
 
 Both actions reload the story immediately so the comment panel reflects the change.
 
-### Generating a sprint report
+### Reports tab
 
-Click **📊 Sprint Report** in the filter toolbar to open the report dialog. The dialog has two tabs.
+Click **📊 Reports** in the top bar (or press `Alt+4`) to open the Reports tab. All reporting features are consolidated here and render inline — no separate dialog windows.
 
-**Sprint Report tab** — choose a scope then click **▶ Generate Sprint Report**:
+The Reports toolbar contains:
 
-- **Sprint** — select any sprint from the dropdown (pre-selected to the currently loaded sprint).
-- **Date Range** — enter From and To dates in `YYYY-MM-DD` format to fetch all issues updated within that window.
+| Control | Action |
+|---|---|
+| **SPRINT** dropdown | Select which sprint to report on (pre-filled with all board sprints; active sprint pre-selected) |
+| **📊 Sprint Report** | Generate the full dashboard-style sprint report |
+| **👤 People Report** | Generate a per-person breakdown using the current sprint's assignees |
+| **📈 Velocity** | Generate a velocity history table (last 8 closed sprints) |
+| **COMPARE** dropdown + **⇆ Compare** | Compare the loaded sprint against another sprint |
+| **⬇ Save HTML** | Save the currently displayed report to an HTML file (enabled after generation) |
 
-The report is a dashboard-style HTML document with the following sections:
+**Sprint Report** — renders a dashboard-style HTML report with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a proportional status stacked bar, a team card grid with per-person progress bars, and a full story table with sticky headers, status badges, and overdue row highlighting.
 
-- **Header** — dark gradient panel with the sprint name, date range, generated date, and story/points summary.
-- **Summary** — five stat cards showing total stories, stories done, total points, points done, and a circular velocity ring with the completion percentage.
-- **Burndown** — SVG chart with a proper background grid, green-tinted ideal region, blue-tinted actual region, and an ahead/behind callout label at the current day marker (e.g. "▲ 8 pts ahead" or "▼ 3 pts behind").
-- **Status** — proportional horizontal stacked bar with a colour-coded legend.
-- **Team** — responsive grid of per-person cards showing avatar initials, story and points progress bars, and a done/remaining summary.
-- **All Stories** — table with sticky headers, pill-shaped status badges, colour-coded priority symbols, and full-row highlighting for overdue items.
+**People Report** — generates a per-assignee summary table (stories, done, story progress, total points, done points, points progress, status breakdown) followed by a per-person detail section. Uses all assignees from the currently loaded sprint.
 
-Overdue due dates highlight the entire row in red. Dates within 3 days are highlighted in amber.
+**Velocity** — shows a table of the last 8 closed sprints with total points committed, points completed, story count, done count, and completion percentage.
 
-**People Report tab** — generate an instance-wide report filtered by person:
+**Compare** — select a sprint from the dropdown and click **⇆ Compare** to highlight rows that have changed (blue) or are new (green) since the comparison sprint. Hover the KEY cell for a tooltip showing what changed. After comparing, SprintMate offers to export the diff as a CSV.
 
-- **Scope** — choose a sprint or a date range.
-- **People** — multi-select from the list of assignees on the current sprint, and/or type additional usernames (comma-separated) in the free-text box.
-
-The People Report shows a summary comparison table (stories, done, story progress, total points, done points, points progress, average cycle time, status breakdown per person), followed by a per-person detail section.
-
-Both reports can be saved as HTML via **⬇ Save as HTML**. The exported file includes print CSS so it renders cleanly when printed or saved as PDF from the browser.
-
-### Velocity history
-
-Click **📈 Velocity** in the Stories toolbar (enabled once stories are loaded) to open the velocity history dialog. It fetches up to N recent closed sprints and calculates committed points (total) and completed points (Done) for each one from the actual sprint issues.
-
-The dialog shows a bar chart with paired bars per sprint (committed in blue, completed in green), a summary table, and a **⬇ Export CSV** button. Use the **Sprints to show** dropdown (3–10) to control how many sprints are included, then click **▶ Load** to refresh.
+All reports can be saved as HTML via **⬇ Save HTML**. The sprint report HTML includes print CSS for clean printing or PDF export from the browser.
 
 ### Sprint progress bar
 
@@ -423,6 +414,7 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | `Alt+1` | Switch to Stories view |
 | `Alt+2` | Switch to Active Sprint board view |
 | `Alt+3` | Switch to Backlog view |
+| `Alt+4` | Switch to Reports tab |
 | `?` | Open keyboard shortcut reference card |
 
 ### Table (when the story table has focus)
@@ -450,9 +442,9 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | **◈ Stories** | Switch to the Stories table view |
 | **⊞ Active Sprint** | Switch to the active sprint board view |
 | **☰ Backlog** | Switch to the Backlog view |
+| **📊 Reports** | Switch to the Reports tab (sprint report, people report, velocity, compare) |
 | **⊕ Sprint** | Open the Sprint Manager (create, start, rename, close) |
 | **✎ Bulk Edit** | Bulk-edit assignee, priority, or story points for selected stories |
-| **?** | Open the keyboard shortcut reference card |
 
 ---
 
@@ -461,7 +453,7 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 ### How to set up and connect for the first time
 
 1. Install dependencies with `pip install -r requirements.txt`, then run `python sprintmate.py`.
-2. Click **⚙ Configure** in the top bar.
+2. Click **Help → Configure…** in the menu bar.
 3. Use the **PRIMARY / SECONDARY** toggle to select the instance you want to set up first.
 4. Enter the **Jira URL** and your **PAT Token**. Optionally set a **Token Expiry** date, a **Default Project**, and a **Default Board** so the app pre-selects them on every launch.
 5. Click **Test Connection** — you should see a green "Connected as …" confirmation.
@@ -587,9 +579,9 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 
 ### How to compare sprints and export the diff
 
-1. Load a sprint.
-2. In the filter toolbar, choose a sprint to compare against from the **Compare** dropdown and click **Compare**.
-3. Changed rows are highlighted blue; new rows (not in the comparison sprint) are highlighted green. Hover any KEY cell for a tooltip showing what changed.
+1. Click **📊 Reports** in the top bar (or press `Alt+4`).
+2. In the Reports toolbar, choose a sprint from the **COMPARE** dropdown and click **⇆ Compare**.
+3. Changed rows are highlighted blue; new rows are highlighted green. Hover any KEY cell for a tooltip showing what changed.
 4. When the comparison finishes, SprintMate offers to export the diff as CSV. Accept to save, or dismiss to skip.
 
 ---
@@ -689,26 +681,24 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 
 ### How to generate a sprint report
 
-1. Load a sprint and click **📊 Sprint Report** in the filter toolbar.
-2. Select a scope — choose a sprint from the dropdown or switch to Date Range.
-3. Click **▶ Generate Sprint Report**. The report renders with a dark header, stat cards (including a circular velocity ring), a burndown chart with an ahead/behind callout, a status stacked bar, a team card grid, and a full story table.
-4. Optionally click **⬇ Save as HTML** to save to a file. The exported HTML includes print CSS for clean printing or PDF export from the browser.
+1. Click **📊 Reports** in the top bar (or press `Alt+4`).
+2. Select a sprint from the **SPRINT** dropdown.
+3. Click **📊 Sprint Report**. The report renders inline with a dark header, stat cards, burndown chart, status stacked bar, team card grid, and full story table.
+4. Click **⬇ Save HTML** to save the report to a file. The exported HTML includes print CSS for clean printing or PDF export from the browser.
 
 ---
 
 ### How to generate a people report
 
-1. Load a sprint and click **📊 Sprint Report** in the filter toolbar.
-2. Switch to the **👤 People Report** tab.
-3. Select a scope — a sprint or date range.
-4. Select people from the list and/or type additional usernames in the free-text box.
-5. Click **▶ Generate People Report**. Optionally click **⬇ Save as HTML**.
+1. Click **📊 Reports** in the top bar (or press `Alt+4`).
+2. Click **👤 People Report**. The report uses all assignees from the currently loaded sprint.
+3. Click **⬇ Save HTML** to save to a file.
 
 ---
 
 ### How to set a custom instance display name
 
-1. Click **⚙ Configure** in the top bar.
+1. Click **Help → Configure…** in the menu bar.
 2. Select the instance using the **PRIMARY / SECONDARY** toggle.
 3. Enter a name in the **Display Name** field (e.g. "Production", "Staging").
 4. Click **Save**. The name replaces "Primary" / "Secondary" everywhere in the app. Leave it blank to revert to the default label.
@@ -717,7 +707,7 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 
 ### How to switch between instances
 
-1. Click **⇄ Switch Instance** in the top bar at any time.
+1. Click **⇄ Switch Instance** in the top bar (or **Help → Configure…** to change settings).
 2. The app swaps to the other instance, clears the current view, and reloads your projects automatically.
 3. If the target instance has no saved credentials, you will be prompted to configure it first.
 
