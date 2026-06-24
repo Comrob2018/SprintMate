@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.23.0"
+APP_VERSION  = "2.23.1"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -6564,8 +6564,32 @@ class MainWindow(QMainWindow):
             else:
                 qs.setValue(key, base64.b64encode(token.encode()).decode() if token else "")
 
+        # Persist recent keys (MRU list)
+        qs.setValue("recent_keys", json.dumps(self._recent_keys))
+
+        # Persist column prefs per board (convert sets to sorted lists for JSON)
+        col_prefs_serialisable = {
+            board_id: sorted(visible)
+            for board_id, visible in self._column_prefs.items()
+        }
+        qs.setValue("column_prefs", json.dumps(col_prefs_serialisable))
+
     def _load_settings(self) -> dict:
         qs = QSettings("SprintMate", "SprintMate")
+
+        # Restore recent keys
+        try:
+            self._recent_keys = json.loads(qs.value("recent_keys", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            self._recent_keys = []
+
+        # Restore column prefs
+        try:
+            raw = json.loads(qs.value("column_prefs", "{}"))
+            self._column_prefs = {bid: set(cols) for bid, cols in raw.items()}
+        except (json.JSONDecodeError, TypeError):
+            self._column_prefs = {}
+
         return {
             "mode":                       qs.value("mode", JiraClient.MODE_SECONDARY),
             "secondary_url":               qs.value("secondary_url", ""),
@@ -7327,41 +7351,53 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _check_quick_add_duplicate(self, summary: str) -> bool:
-        """Return True if a close match exists in the sprint; prompt user to confirm."""
-        term = summary.lower().strip()
+        """Return True (safe to create) or False (user cancelled) after checking for
+        similar stories in the current sprint.
+
+        Matching strategy:
+        - Case-insensitive, punctuation-stripped word comparison.
+        - Stop words (articles, prepositions, conjunctions) are excluded so that
+          "Add a button to the form" and "Add a field to the form" don't false-positive.
+        - Minimum 3 meaningful words required before checking (avoids false positives
+          on very short summaries like "Fix bug").
+        - Threshold: >65% of meaningful words overlap with an existing story.
+        """
+        _STOP_WORDS = {
+            "a", "an", "the", "and", "or", "but", "in", "on", "at", "to",
+            "for", "of", "with", "by", "from", "as", "is", "was", "are",
+            "be", "been", "it", "its", "this", "that", "we", "i", "my",
+        }
+
+        def _words(text: str) -> set:
+            cleaned = re.sub(r"[^\w\s]", "", text.lower())
+            return {w for w in cleaned.split() if w not in _STOP_WORDS}
+
+        tw = _words(summary)
+        if len(tw) < 3:
+            return True   # too short to check reliably — skip
+
         matches = []
         for iss in self._issues:
-            existing = (iss.get("fields", {}).get("summary") or "").lower()
-            # Simple overlap check — if >60% of words match
-            tw = set(term.split())
-            ew = set(existing.split())
-            if tw and ew and len(tw & ew) / max(len(tw), len(ew)) > 0.6:
-                matches.append(f"{iss['key']}  —  {iss['fields'].get('summary','')[:70]}")
+            existing = (iss.get("fields", {}).get("summary") or "")
+            ew = _words(existing)
+            if not ew:
+                continue
+            overlap = len(tw & ew) / max(len(tw), len(ew))
+            if overlap > 0.65:
+                matches.append(f"{iss['key']}  —  {existing[:70]}")
+
         if not matches:
-            return True   # no duplicates, safe to proceed
+            return True
+
         reply = QMessageBox.question(
             self, "Possible Duplicate",
-            f"Similar stories already exist in this sprint:\n\n"
+            "Similar stories already exist in this sprint:\n\n"
             + "\n".join(matches[:5])
             + "\n\nCreate anyway?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         return reply == QMessageBox.StandardButton.Yes
-
-    def _get_issue_links(self, key: str):
-        """Fetch issue links for a story (blocks / is blocked by / relates to)."""
-        if not self._client:
-            return []
-        try:
-            url = (f"{self._client.base_url}/rest/api/"
-                   f"{self._client.api_version}/issue/{key}?fields=issuelinks")
-            req = urllib.request.Request(url, headers=self._client.headers)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-            return data.get("fields", {}).get("issuelinks", [])
-        except Exception:
-            return []
 
     def _apply_default_columns(self):
         for col, _ in COLS_TOGGLABLE:
@@ -9208,6 +9244,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._cancel_workers()
+        self._save_settings()
         event.accept()
 
 
