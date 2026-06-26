@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.26.1
+# SprintMate  ◈  v2.26.2
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -280,6 +280,8 @@ Each button switches to its own sub-tab and generates into it. Sub-tabs persist 
 **⇆ Compare** — after comparing, results render here as an HTML summary with added/changed/removed stat pills and a colour-coded diff table. SprintMate switches to this sub-tab automatically after the comparison completes.
 
 All reports can be saved as HTML via **⬇ Save HTML**. The sprint report HTML includes print CSS for clean printing or PDF export from the browser.
+
+**Finding text in a report** — press `Ctrl+F` while on the Reports tab to open a find bar at the bottom. Type to search, use ▲ / ▼ to move between matches, and press `Escape` or click ✕ to close. Available on all HTML-based sub-tabs (Sprint Report, People Report, Compare, Burndown).
 
 ### Sprint progress bar
 
