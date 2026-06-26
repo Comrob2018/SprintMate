@@ -1,4 +1,19 @@
 # SprintMate Changelog
+## [2.26.1] — 2026-06-24
+### Bug Fixes & Improvements
+* **Reports tab auto-generation (Option D).** The Reports tab no longer requires manually clicking ▶ Generate before content appears. Three complementary mechanisms now handle this:
+  * **Background pre-generation** — 800ms after `Load Stories` completes, `_reports_pregenerate_sprint` silently builds the Sprint Report in a background-safe call (no spinner, no tab switch). It's ready by the time the user navigates to the Reports tab.
+  * **First-visit auto-generation** — `_on_reports_tab_changed` checks `_reports_generated` (a set of already-generated sub-tab indices) and automatically generates the relevant report on first visit: Sprint Report (tab 0), People Report (tab 1), Velocity (tab 2), Burndown (tab 4). Compare (tab 3) is skipped as it requires the user to select a comparison sprint.
+  * **Animated placeholder** — each generate method now calls `_reports_show_placeholder()` first, rendering a dark-themed "Generating…" message with three animated blinking dots so the user sees immediate feedback.
+  * `_reports_generated` is cleared when the sprint view resets so loading a new sprint starts fresh.
+* **SVG rendering fixed for QTextBrowser.** `QTextBrowser` uses `QTextDocument` which supports only a subset of SVG — `stroke-dasharray`, `fill-opacity`, `stroke-linecap`, `stroke-linejoin`, CSS `transform` on SVG elements, and `opacity` are all unsupported or produce incorrect results (solid blobs, invisible elements). Both `_build_report` and `_build_burndown_svg` now accept a `for_export=False` parameter and branch into two rendering modes:
+  * **In-app (QTextBrowser)** — velocity ring uses a polygon-based filled wedge computed with `math.cos`/`sin`, overlaid with a smaller circle to create the donut shape; no CSS transforms. Burndown uses plain `<line>` elements, no shaded regions, no dashed lines, no opacity attributes. Both use app theme colours (`CARD_BG`, `BORDER`, `TEXT_SEC`).
+  * **Export (real browser)** — full quality SVG with `stroke-dasharray`, `fill-opacity`, `stroke-linecap="round"`, `stroke-linejoin="round"`, opacity, shaded regions, and dashed ideal line. `_reports_save_html` regenerates sprint report and burndown with `for_export=True` at save time so exported HTML always has the full design.
+* **People report JQL fix.** `get_issues_for_people_report` was building `assignee = "displayName"` in JQL, which Jira rejects or returns wrong results for (Jira expects username or accountId). A new `JiraClient.resolve_assignee_ids()` method converts display names to Jira-compatible identifiers using the members cache. `_reports_generate_people` now calls this before building the JQL for date range queries.
+* **People report key mismatch fixed.** `_build_people_report` was keying `by_assignee` on `name`/`accountId` but the assignees list contained `displayName` values, causing all issues to be skipped. The matching now tries `displayName` first, then falls back to `name`/`accountId` for compatibility.
+
+---
+ 
 ## [2.26.0] — 2026-06-24
 ### Features
 * **Backlog project and board selectors.** The Backlog tab now has the same load bar as the Active Sprint board — a PROJECT dropdown, a BOARD dropdown, and a **↺ Load Backlog** button sit at the top of the tab. The dropdowns are pre-filled from whatever the Stories tab has selected and sync automatically whenever boards finish loading, issues finish loading, or the user switches to the Backlog tab. The old external Load Backlog button in the MainWindow toolbar has been removed — the button now lives inside the widget. Clicking **↺ Load Backlog** syncs the selected project and board back to the Stories tab combos and triggers the same `_load_backlog()` path as before. A new `_switch_to_backlog()` method replaces the bare `lambda: self.tabs.setCurrentIndex(2)` used previously, ensuring combos are always in sync when the tab is opened via the toolbar button or `Alt+3`.
