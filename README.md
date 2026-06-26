@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.26.2
+# SprintMate  ◈  v2.27.0
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -67,7 +67,7 @@ SprintMate has four views, switchable via the top bar buttons or keyboard shortc
 
 | View | Button | Shortcut | Description |
 |---|---|---|---|
-| **◈ Stories** | ◈ Stories | `Alt+1` | The main sortable/filterable story table with edit panel |
+| **◈ Stories** | ◈ Stories (N) | `Alt+1` | The main sortable/filterable story table with edit panel — tab shows story count when loaded |
 | **⊞ Active Sprint** | ⊞ Active Sprint | `Alt+2` | Drag-and-drop board with one column per status |
 | **☰ Backlog** | ☰ Backlog | `Alt+3` | All open stories not assigned to any sprint |
 | **📊 Reports** | 📊 Reports | `Alt+4` | Sprint report, people report, velocity history, and sprint compare |
@@ -283,6 +283,18 @@ All reports can be saved as HTML via **⬇ Save HTML**. The sprint report HTML i
 
 **Finding text in a report** — press `Ctrl+F` while on the Reports tab to open a find bar at the bottom. Type to search, use ▲ / ▼ to move between matches, and press `Escape` or click ✕ to close. Available on all HTML-based sub-tabs (Sprint Report, People Report, Compare, Burndown).
 
+### Command palette
+
+Press `Ctrl+K` anywhere in the app to open the command palette. Type to fuzzy-search across all 22 available actions — loading, creating, editing, switching views, generating reports, and more. Use `↑` / `↓` to navigate the list, `Enter` to run the selected command, and `Escape` to dismiss.
+
+---
+
+### Command palette
+
+Press `Ctrl+K` anywhere in the app to open the command palette. Type to fuzzy-search across all 22 available actions — loading, creating, editing, switching views, generating reports, and more. Use `↑` / `↓` to navigate, `Enter` to run, `Escape` to dismiss.
+
+---
+
 ### Sprint progress bar
 
 A 4px coloured bar sits directly below the story count row, visible whenever a sprint is loaded. It reflects the percentage of story points completed:
@@ -424,6 +436,8 @@ Comments are exported as a pipe-separated list in the format `[Author]: body tex
 | `Alt+2` | Switch to Active Sprint board view |
 | `Alt+3` | Switch to Backlog view |
 | `Alt+4` | Switch to Reports tab |
+| `Ctrl+K` | Open command palette |
+| `Ctrl+K` | Open command palette |
 | `?` | Open keyboard shortcut reference card |
 
 ### Table (when the story table has focus)
@@ -747,6 +761,8 @@ Press `?` anywhere in the app, or click the **?** button in the toolbar. A scrol
 ## Notes
 
 - The app targets **Jira Data Center** exclusively and uses the **REST API v2** and the **Agile API v1.0** for boards, sprints, and ranking.
+- **Toast notifications** appear in the bottom-right corner for successes (✓), errors (✗), and warnings (⚠). After creating a story via the quick-add bar, the toast includes an **Undo** button that archives the story if clicked within 5 seconds.
+- **Toast notifications** appear in the bottom-right corner for successes (✓), errors (✗), and warnings (⚠). After creating a story via quick-add, the toast includes an **Undo** button that archives the story if clicked within 5 seconds.
 - All API calls run on background threads — the UI stays responsive during loads. A maximum of 5 background operations can run concurrently. Failed operations show a **↩ Retry** button in the error dialog where supported.
 - Settings (URLs, default project/board, token expiry, project/board filters) are stored via `QSettings` (registry on Windows, `~/.config` on Linux, `~/Library/Preferences` on macOS). PAT tokens are stored in the OS keychain when `keyring` is available.
 - **Recent stories history** and **per-board column visibility preferences** are also persisted to `QSettings` and restored on the next launch. Both are saved automatically when the app closes cleanly.
