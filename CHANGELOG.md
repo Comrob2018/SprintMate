@@ -1,4 +1,13 @@
 # SprintMate Changelog
+## [2.26.2] — 2026-06-24
+### Bug Fixes & Improvements
+* **Context-aware `Ctrl+F`.** `Ctrl+F` now does the right thing depending on which tab is active rather than conflicting with the OS/browser "find in page" expectation. On the Stories tab it focuses and selects the Stories filter box. On the Active Sprint board it focuses the Kanban filter box. On the Backlog tab it focuses the Backlog search box. On the Reports tab it opens an inline find bar at the bottom of the tab.
+* **Reports tab find bar.** When `Ctrl+F` is pressed on the Reports tab, a find bar appears at the bottom containing a text input, ▲ Previous / ▼ Next buttons (with wrap-around), a match indicator (✓ or "No match"), and a ✕ close button. Uses `QTextBrowser.find()` to search rendered HTML content, highlight matches, and scroll to them. `Escape` closes the bar and returns focus to the report browser. Available on Sprint Report, People Report, Compare, and Burndown sub-tabs. Velocity (native widgets) shows the bar but indicates no results.
+* **`/` shortcut added.** Pressing `/` anywhere in the app focuses and selects the Stories filter box — the standard convention in Jira, GitHub, Linear, and Slack. This is the dedicated shortcut for the Stories filter; `Ctrl+F` is now the broader context-aware find.
+* **`Ctrl+F` for filter removed and replaced.** The previous `Ctrl+F` binding that focused the Stories filter box has been removed. It conflicted with the universal find-in-page expectation and was replaced with `/` (Stories filter) and the new context-aware `Ctrl+F` described above.
+
+---
+ 
 ## [2.26.1] — 2026-06-24
 ### Bug Fixes & Improvements
 * **Reports tab auto-generation (Option D).** The Reports tab no longer requires manually clicking ▶ Generate before content appears. Three complementary mechanisms now handle this:
