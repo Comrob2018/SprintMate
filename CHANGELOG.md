@@ -1,4 +1,20 @@
 # SprintMate Changelog
+## [2.27.0] — 2026-06-25
+### Features
+* **Escape to close all dialogs.** A module-level `_add_escape_shortcut(dialog)` helper was added and wired into all 7 `QDialog` subclasses (`NewStoryDialog`, `BulkCreateDialog`, `ImportCommentsDialog`, `SettingsDialog`, `ExportStoriesDialog`, `SprintManagerDialog`, `VelocityHistoryDialog`) as well as all inline edit dialogs (story points, assignee, due date) and the bulk edit dialog.
+* **Enter to confirm inline edit dialogs.** `setDefault(True)` added to the OK button in all inline edit dialogs and the bulk edit dialog, so pressing Enter submits without requiring a mouse click.
+* **Logical tab order in the edit panel.** `setTabOrder` chain added to `StoryEditPanel._build_ui`: Assignee → Issue Type → Priority → Points → Sprint → Due Date → Transition → Feature Link → Description → Comment → Save.
+* **Story count badge on the Stories tab.** The tab now reads `◈  STORIES (42)` when stories are loaded and resets to `◈  STORIES` when the sprint view is cleared.
+* **Column header tooltips.** All 9 story table columns now have descriptive tooltips explaining abbreviations — particularly useful for PTS, TYPE, and FEATURE LINK.
+* **Assignee initials in the story table.** The Assignee cell now shows `  JD  John Doe` with a two-letter initials prefix, making rows scannable without reading the full name. Full name is also shown as a tooltip.
+* **Status pill badge in the story table.** The Status cell now has a translucent coloured background (`STATUS_COLOR + "22"`) matching the status colour, giving it a pill-badge appearance consistent with the Reports tab.
+* **Sticky sprint selection per board.** The last loaded sprint is remembered per board ID in `_last_sprint_per_board` (persisted to `QSettings`). When sprints load for a board, the previously used sprint is automatically re-selected. Consolidates the previous partial per-key QSettings approach.
+* **Toast notification system.** A `ToastNotification` class renders slide-in corner notifications (bottom-right, 3-second auto-dismiss) with ✓/✗/⚠ icons and colour coding (green/orange/amber). `_status()` now shows toasts automatically for messages starting with `✓`, `✗`, or `⚠` — successes, errors, and warnings respectively.
+* **Command palette (`Ctrl+K`).** A fuzzy-search launcher with 22 commands covering all major actions: loading, creating, editing, archiving, exporting, switching views, generating reports, and more. Type to filter (matches label and keywords), `↑`/`↓` to navigate, `Enter` to run, `Escape` to dismiss.
+* **Undo for quick-add.** After creating a story via the quick-add bar, a 5-second toast with an **Undo** button appears in the bottom-right corner. Clicking it archives the just-created story via `archive_issue` and reloads the sprint. The created key is stored in `_last_quick_add_key`.
+
+---
+ 
 ## [2.26.2] — 2026-06-24
 ### Bug Fixes & Improvements
 * **Context-aware `Ctrl+F`.** `Ctrl+F` now does the right thing depending on which tab is active rather than conflicting with the OS/browser "find in page" expectation. On the Stories tab it focuses and selects the Stories filter box. On the Active Sprint board it focuses the Kanban filter box. On the Backlog tab it focuses the Backlog search box. On the Reports tab it opens an inline find bar at the bottom of the tab.
