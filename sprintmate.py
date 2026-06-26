@@ -98,7 +98,7 @@ STATUS_COLORS = {
     "Blocked":     ACCENT_ORANGE,
 }
 
-APP_VERSION  = "2.26.0"
+APP_VERSION  = "2.26.2"
 GITHUB_RAW_URL = (
     "https://raw.githubusercontent.com/Comrob2018/SprintMate/main/sprintmate.py"
 )
@@ -634,10 +634,36 @@ class JiraClient:
             start += max_results
         return all_sprints
 
+    def resolve_assignee_ids(self, display_names: list[str],
+                             members: list[dict]) -> list[str]:
+        """Convert a list of display names to Jira username/accountId values
+        suitable for use in JQL `assignee =` clauses.
+
+        Falls back to the display name itself if no match is found (so the JQL
+        still runs, just may return no results for that person).
+        """
+        # Build lookup: displayName (lower) -> name or accountId
+        lookup: dict[str, str] = {}
+        for m in members:
+            display = (m.get("displayName") or "").lower()
+            uid     = m.get("name") or m.get("accountId") or ""
+            if display and uid:
+                lookup[display] = uid
+
+        result = []
+        for name in display_names:
+            uid = lookup.get(name.lower())
+            result.append(uid if uid else name)
+        return result
+
     def get_issues_for_people_report(self, assignees: list[str],
                                      date_from: str = "", date_to: str = "",
                                      sprint_id: int = 0, board_id: int = 0) -> list:
-        """Fetch all issues assigned to the given users within a date range or sprint."""
+        """Fetch all issues assigned to the given users within a date range or sprint.
+
+        `assignees` should contain Jira usernames or accountIds — NOT display names.
+        Use `resolve_assignee_ids()` to convert display names first.
+        """
         sp = self.story_point_field_id
         fields = ",".join([
             "summary", "assignee", "status", "priority", "issuetype",
@@ -2823,7 +2849,8 @@ class SprintReportDialog(QDialog):
         worker.start()
         self._sr_worker = worker
 
-    def _build_report(self, issues: list = None, scope_label: str = ""):
+    def _build_report(self, issues: list = None, scope_label: str = "",
+                      for_export: bool = False):
         issues    = issues if issues is not None else self._issues
         sp        = self._sp_field
         today_str = date.today().strftime("%B %d, %Y")
@@ -2913,22 +2940,53 @@ class SprintReportDialog(QDialog):
                 f'{pct}%</span></div>'
             )
 
-        def ring(pct, colour="#3fb950", r=38):
-            circ = round(2 * 3.14159 * r, 1)
-            dash = round(pct / 100 * circ, 1)
-            return (
-                f'<svg width="{r*2+8}" height="{r*2+8}" viewBox="0 0 {r*2+8} {r*2+8}" '
-                f'style="transform:rotate(-90deg);">'
-                f'<circle cx="{r+4}" cy="{r+4}" r="{r}" fill="none" '
-                f'stroke="#e9ecef" stroke-width="6"/>'
-                f'<circle cx="{r+4}" cy="{r+4}" r="{r}" fill="none" '
-                f'stroke="{colour}" stroke-width="6" '
-                f'stroke-dasharray="{dash} {circ}" stroke-linecap="round"/>'
-                f'</svg>'
-            )
+        def ring(pct, colour="#3fb950", r=38, for_export=False):
+            """Circular progress ring.
+            for_export=True  → full SVG with stroke-dasharray (real browsers).
+            for_export=False → simple arc approximation QTextBrowser can render.
+            """
+            if for_export:
+                circ = round(2 * 3.14159 * r, 1)
+                dash = round(pct / 100 * circ, 1)
+                return (
+                    f'<svg width="{r*2+8}" height="{r*2+8}" viewBox="0 0 {r*2+8} {r*2+8}" '
+                    f'style="transform:rotate(-90deg);">'
+                    f'<circle cx="{r+4}" cy="{r+4}" r="{r}" fill="none" '
+                    f'stroke="#e9ecef" stroke-width="6"/>'
+                    f'<circle cx="{r+4}" cy="{r+4}" r="{r}" fill="none" '
+                    f'stroke="{colour}" stroke-width="6" '
+                    f'stroke-dasharray="{dash} {circ}" stroke-linecap="round"/>'
+                    f'</svg>'
+                )
+            else:
+                # QTextBrowser-compatible: filled arc using polygon approximation
+                import math
+                cx = cy = r + 4
+                size = r * 2 + 8
+                angle = pct / 100 * 360
+                # Draw filled wedge as a polygon
+                points = [f"{cx},{cy}"]
+                steps = max(1, int(angle / 5))
+                for i in range(steps + 1):
+                    a = math.radians(-90 + (angle * i / steps if steps else 0))
+                    px = cx + r * math.cos(a)
+                    py = cy + r * math.sin(a)
+                    points.append(f"{px:.1f},{py:.1f}")
+                poly = " ".join(points)
+                # Background circle + filled wedge
+                return (
+                    f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+                    f'xmlns="http://www.w3.org/2000/svg">'
+                    f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="#2d333b"/>'
+                    f'<polygon points="{poly}" fill="{colour}" opacity="0.9"/>'
+                    f'<circle cx="{cx}" cy="{cy}" r="{r-8}" fill="{PANEL_BG}"/>'
+                    f'</svg>'
+                )
 
-        burndown_svg = self._build_burndown_svg(total_pts, done_pts, n_total, n_done)
-        velocity_ring = ring(pct_done)
+        burndown_svg = self._build_burndown_svg(
+            total_pts, done_pts, n_total, n_done, for_export=for_export
+        )
+        velocity_ring = ring(pct_done, for_export=for_export)
 
         stat_cards = f"""
     <div class="stat-grid">
@@ -3219,8 +3277,12 @@ class SprintReportDialog(QDialog):
         self._browser.setHtml(self._html)
 
     def _build_burndown_svg(self, total_pts: int, done_pts: int,
-                            n_total: int, n_done: int) -> str:
-        """Generate a burndown SVG using real sprint start/end dates when available."""
+                            n_total: int, n_done: int,
+                            for_export: bool = False) -> str:
+        """Generate a burndown SVG.
+        for_export=False → simplified shapes compatible with QTextBrowser.
+        for_export=True  → full SVG with gradients/opacity for real browsers.
+        """
         W, H    = 680, 240
         PAD_L   = 52
         PAD_R   = 20
@@ -3318,8 +3380,8 @@ class SprintReportDialog(QDialog):
 
         date_note = f" \u00b7 {start_str} \u2192 {end_str}" if start_str and end_str else ""
 
-        return f"""<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg"
-     style="display:block;max-width:100%;">
+        if for_export:
+            svg_body = f"""
       <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}"
         fill="#fafbfc" rx="4" ry="4"/>
       {grid}
@@ -3352,11 +3414,40 @@ class SprintReportDialog(QDialog):
         x2="{PAD_L + chart_w - 72}" y2="{PAD_T + 10}"
         stroke="#388bfd" stroke-width="2.5"/>
       <text x="{PAD_L + chart_w - 68}" y="{PAD_T + 14}"
-        fill="#57606a" font-size="10" font-family="sans-serif">Actual</text>
+        fill="#57606a" font-size="10" font-family="sans-serif">Actual</text>"""
+        else:
+            # QTextBrowser-compatible: no fill-opacity, no stroke-dasharray,
+            # no stroke-linecap/linejoin, no CSS transform on SVG elements.
+            # Use solid colours and simple shapes only.
+            svg_body = f"""
+      <rect x="{PAD_L}" y="{PAD_T}" width="{chart_w}" height="{chart_h}"
+        fill="{CARD_BG}" rx="0" ry="0"/>
+      {grid}
+      <line x1="{px(0)}" y1="{py(total_pts)}" x2="{px(sprint_days)}" y2="{py(0)}"
+        stroke="#3fb950" stroke-width="1"/>
+      <line x1="{px(0)}" y1="{py(total_pts)}" x2="{px(current_day)}" y2="{py(remaining)}"
+        stroke="#388bfd" stroke-width="3"/>
+      <circle cx="{px(current_day)}" cy="{py(remaining)}" r="5"
+          fill="#388bfd" stroke="{CARD_BG}" stroke-width="2"/>
+      {callout}
+      <line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T + chart_h}"
+        stroke="{BORDER}" stroke-width="1"/>
+      <line x1="{PAD_L}" y1="{PAD_T + chart_h}"
+        x2="{PAD_L + chart_w}" y2="{PAD_T + chart_h}" stroke="{BORDER}" stroke-width="1"/>
+      {x_labels}
+      <text x="{PAD_L + chart_w // 2}" y="{H - 4}" text-anchor="middle"
+        fill="{TEXT_SEC}" font-size="11" font-family="sans-serif">Sprint Day</text>
+      <text x="{PAD_L + chart_w - 148}" y="{PAD_T + 14}"
+        fill="#3fb950" font-size="10" font-family="sans-serif">&#8212; Ideal</text>
+      <text x="{PAD_L + chart_w - 90}" y="{PAD_T + 14}"
+        fill="#388bfd" font-size="10" font-family="sans-serif">&#8212; Actual</text>"""
+
+        return f"""<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg">
+    {svg_body}
     </svg>
-    <p style="font-size:11px;color:#8b949e;margin:8px 0 0;font-family:sans-serif;">
-      {total_pts} total pts \u00b7 {done_pts} done \u00b7 {remaining} remaining
-      \u00b7 day {current_day} of {sprint_days}{date_note}
+    <p style="font-size:11px;color:{TEXT_SEC if not for_export else '#8b949e'};margin:8px 0 0;font-family:sans-serif;">
+      {total_pts} total pts · {done_pts} done · {remaining} remaining
+      · day {current_day} of {sprint_days}{date_note}
     </p>"""
 
 
@@ -3469,7 +3560,7 @@ class SprintReportDialog(QDialog):
         sp    = self._sp_field
         today = date.today().strftime("%Y-%m-%d")
 
-        # ── Group issues by assignee username ─────────────────────────────────
+        # ── Group issues by assignee display name ────────────────────────────
         by_assignee: dict[str, dict] = {}
         for a in assignees:
             by_assignee[a] = {
@@ -3483,11 +3574,24 @@ class SprintReportDialog(QDialog):
         for iss in issues:
             f     = iss.get("fields", {})
             aobj  = f.get("assignee") or {}
-            aname = aobj.get("name") or aobj.get("accountId") or ""
-            if aname not in by_assignee:
+            # Match on displayName first (what the people list shows),
+            # fall back to name/accountId for legacy DC instances
+            display = (aobj.get("displayName")
+                       or aobj.get("name")
+                       or aobj.get("accountId")
+                       or "")
+            # Try display name first, then raw name/accountId
+            key_used = None
+            if display in by_assignee:
+                key_used = display
+            else:
+                raw = aobj.get("name") or aobj.get("accountId") or ""
+                if raw in by_assignee:
+                    key_used = raw
+            if key_used is None:
                 continue
-            rec = by_assignee[aname]
-            rec["display"] = aobj.get("displayName") or aname
+            rec = by_assignee[key_used]
+            rec["display"] = display or key_used
 
             status = (f.get("status") or {}).get("name", "—")
             pts_raw = next((f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS) if f.get(k) is not None), None)
@@ -3540,8 +3644,8 @@ class SprintReportDialog(QDialog):
 
         # ── Summary table ─────────────────────────────────────────────────────
         summary_rows = []
-        for aname in assignees:
-            rec  = by_assignee.get(aname, {})
+        for akey in assignees:
+            rec  = by_assignee.get(akey, {})
             if not rec:
                 continue
             done_pct = round(rec["done"] / rec["total"] * 100) if rec["total"] else 0
@@ -3553,7 +3657,7 @@ class SprintReportDialog(QDialog):
             )
             summary_rows.append(
                 f"<tr>"
-                f"<td><strong>{rec.get('display', aname)}</strong></td>"
+                f"<td><strong>{rec.get('display', akey)}</strong></td>"
                 f"<td style='text-align:center;'>{rec['total']}</td>"
                 f"<td style='text-align:center;'>{rec['done']}</td>"
                 f"<td>{bar(done_pct, '#3fb950')}</td>"
@@ -3567,8 +3671,8 @@ class SprintReportDialog(QDialog):
 
         # ── Per-person detail sections ─────────────────────────────────────────
         detail_sections = []
-        for aname in assignees:
-            rec = by_assignee.get(aname, {})
+        for akey in assignees:
+            rec = by_assignee.get(akey, {})
             if not rec or not rec["issues"]:
                 continue
             rows = []
@@ -3610,7 +3714,7 @@ class SprintReportDialog(QDialog):
             done_pct = round(rec["done"] / rec["total"] * 100) if rec["total"] else 0
             detail_sections.append(f"""
 <h2 style="margin-top:36px;border-bottom:2px solid #d0d7de;padding-bottom:6px;">
-  {rec.get('display', aname)}
+  {rec.get('display', akey)}
   <span style="font-size:13px;font-weight:400;color:#57606a;margin-left:12px;">
     {rec['total']} stories &nbsp;·&nbsp; {rec['done']} done &nbsp;·&nbsp;
     {rec['pts']} pts total &nbsp;·&nbsp; {rec['done_pts']} pts done &nbsp;·&nbsp;
@@ -5133,6 +5237,7 @@ class MainWindow(QMainWindow):
         self._recent_keys: list[str] = []          # MRU list of viewed issue keys
         self._unsaved_row: int | None = None       # row with pending edits
         self._reports_html_map: dict[int, str] = {}  # reports sub-tab index -> html
+        self._reports_generated: set[int] = set()    # sub-tabs already generated
 
         self._build_ui()
         self._settings = self._load_settings()
@@ -5861,6 +5966,45 @@ class MainWindow(QMainWindow):
         self._reports_html_map  = {}   # sub-tab index → html string
         reports_outer_layout.addWidget(self._reports_tabs, 1)
 
+        # ── Find bar (hidden by default, shown with Ctrl+F on Reports tab) ────
+        self._find_bar = QFrame()
+        self._find_bar.setStyleSheet(
+            f"QFrame {{ background: {PANEL_BG}; border-top: 1px solid {BORDER}; }}"
+        )
+        fb_find = QHBoxLayout(self._find_bar)
+        fb_find.setContentsMargins(10, 4, 10, 4)
+        fb_find.setSpacing(6)
+        self._find_edit = QLineEdit()
+        self._find_edit.setPlaceholderText("Find in report…")
+        self._find_edit.setMaximumWidth(280)
+        self._find_edit.textChanged.connect(self._find_in_report)
+        self._find_edit.returnPressed.connect(self._find_next_in_report)
+        fb_find.addWidget(self._find_edit)
+        self._find_prev_btn = QPushButton("▲")
+        self._find_prev_btn.setFixedWidth(28)
+        self._find_prev_btn.setObjectName("toolbar_btn")
+        self._find_prev_btn.clicked.connect(self._find_prev_in_report)
+        fb_find.addWidget(self._find_prev_btn)
+        self._find_next_btn = QPushButton("▼")
+        self._find_next_btn.setFixedWidth(28)
+        self._find_next_btn.setObjectName("toolbar_btn")
+        self._find_next_btn.clicked.connect(self._find_next_in_report)
+        fb_find.addWidget(self._find_next_btn)
+        self._find_match_lbl = QLabel("")
+        self._find_match_lbl.setObjectName("dim")
+        fb_find.addWidget(self._find_match_lbl)
+        fb_find.addStretch()
+        find_close = QPushButton("✕")
+        find_close.setFixedWidth(24)
+        find_close.setObjectName("toolbar_btn")
+        find_close.clicked.connect(self._close_find_bar)
+        fb_find.addWidget(find_close)
+        self._find_bar.setVisible(False)
+        reports_outer_layout.addWidget(self._find_bar)
+        QShortcut(QKeySequence("Escape"), self._find_edit).activated.connect(
+            self._close_find_bar
+        )
+
         self.tabs.addTab(reports_outer, "📊  REPORTS")
 
         self.status_bar = QStatusBar()
@@ -5889,11 +6033,16 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(
             lambda: self.export_btn.click() if self.export_btn.isEnabled() else None
         )
-        QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(
-            lambda: self.search_edit.setFocus()
-        )
         QShortcut(QKeySequence("Ctrl+C"), self.table).activated.connect(
             self._copy_row_short
+        )
+        QShortcut(QKeySequence("/"), self).activated.connect(
+            lambda: (self.search_edit.setFocus(),
+                     self.search_edit.selectAll())
+        )
+        # Ctrl+F — context-aware find
+        QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(
+            self._ctrl_f
         )
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(
             self._copy_row_full
@@ -6933,6 +7082,7 @@ class MainWindow(QMainWindow):
         self._rpt_burndown_browser.clear()
         self._reports_html_map.clear()
         self._reports_html = ""
+        self._reports_generated.clear()
         self._rpt_vel_table.setRowCount(0)
         self._progress_bar.setVisible(False)
         self._progress_bar.setValue(0)
@@ -7447,6 +7597,9 @@ class MainWindow(QMainWindow):
         self.quick_add_edit.setEnabled(True)
         # Sync backlog combos with current project/board selection
         self.backlog_widget.sync_combos(self.project_combo, self.board_combo)
+        # Pre-generate the Sprint Report in the background after a short delay
+        # so it's ready when the user switches to the Reports tab
+        QTimer.singleShot(800, self._reports_pregenerate_sprint)
         self._rpt_gen_btn.setEnabled(True)
         self._rpt_people_btn.setEnabled(True)
         self._rpt_velocity_btn.setEnabled(True)
@@ -7750,7 +7903,8 @@ class MainWindow(QMainWindow):
                 ("Ctrl+S",       "Save Changes"),
                 ("Ctrl+I",       "Import Comments"),
                 ("Ctrl+E",       "Export Stories"),
-                ("Ctrl+F",       "Focus filter box"),
+                ("/",            "Focus Stories filter box"),
+                ("Ctrl+F",       "Find in current view (filter box on Stories/Kanban/Backlog; find bar on Reports)"),
                 ("Ctrl+C",       "Copy selected row (comma-separated)"),
                 ("Ctrl+Shift+C", "Copy full issue as CSV row"),
                 ("Ctrl+Shift+M", "Copy row as Markdown"),
@@ -9102,10 +9256,120 @@ class MainWindow(QMainWindow):
         self._reports_generate_velocity()
 
     def _on_reports_tab_changed(self, idx: int):
-        """Update Save HTML button state when switching sub-tabs."""
+        """Update Save HTML button state and auto-generate on first visit."""
         html = self._reports_html_map.get(idx, "")
         self._reports_html = html
         self._rpt_save_btn.setEnabled(bool(html))
+
+        # Auto-generate on first visit if data is loaded and not yet generated
+        if idx not in self._reports_generated and self._issues and self._client:
+            if idx == 0:
+                self._reports_pregenerate_sprint()
+            elif idx == 1:
+                self._reports_generate_people()
+            elif idx == 2:
+                self._reports_generate_velocity()
+            elif idx == 4:
+                self._reports_generate_burndown()
+            # idx 3 (Compare) requires user to select a comparison sprint — skip
+
+    def _ctrl_f(self):
+        """Context-aware Ctrl+F — find/filter in whichever tab is active."""
+        tab = self.tabs.currentIndex()
+        if tab == 0:
+            # Stories — focus the filter box (same as /)
+            self.search_edit.setFocus()
+            self.search_edit.selectAll()
+        elif tab == 1:
+            # Active Sprint — focus the Kanban filter box
+            self.kanban_widget._filter_edit.setFocus()
+            self.kanban_widget._filter_edit.selectAll()
+        elif tab == 2:
+            # Backlog — focus the backlog search box
+            self.backlog_widget._search.setFocus()
+            self.backlog_widget._search.selectAll()
+        elif tab == 3:
+            # Reports — open/focus the find bar
+            self._find_bar.setVisible(True)
+            self._find_edit.setFocus()
+            self._find_edit.selectAll()
+
+    def _active_report_browser(self):
+        """Return the QTextBrowser for the currently visible report sub-tab."""
+        idx = self._reports_tabs.currentIndex()
+        return {
+            0: self._rpt_sprint_browser,
+            1: self._rpt_people_browser,
+            3: self._rpt_compare_browser,
+            4: self._rpt_burndown_browser,
+        }.get(idx)  # idx 2 (Velocity) has no browser — native widgets only
+
+    def _find_in_report(self, text: str):
+        """Highlight the first match as the user types."""
+        browser = self._active_report_browser()
+        if not browser:
+            self._find_match_lbl.setText("—")
+            return
+        if not text:
+            self._find_match_lbl.setText("")
+            # Clear any existing selection by re-loading (lightweight reset)
+            browser.moveCursor(browser.textCursor().MoveOperation.Start)
+            return
+        from PyQt6.QtGui import QTextDocument
+        found = browser.find(text)
+        self._find_match_lbl.setText("✓" if found else "No match")
+
+    def _find_next_in_report(self):
+        """Find next occurrence (wraps around)."""
+        browser = self._active_report_browser()
+        text    = self._find_edit.text()
+        if not browser or not text:
+            return
+        found = browser.find(text)
+        if not found:
+            # Wrap to start
+            browser.moveCursor(browser.textCursor().MoveOperation.Start)
+            found = browser.find(text)
+        self._find_match_lbl.setText("✓" if found else "No match")
+
+    def _find_prev_in_report(self):
+        """Find previous occurrence."""
+        browser = self._active_report_browser()
+        text    = self._find_edit.text()
+        if not browser or not text:
+            return
+        from PyQt6.QtGui import QTextDocument
+        found = browser.find(text, QTextDocument.FindFlag.FindBackward)
+        if not found:
+            # Wrap to end
+            browser.moveCursor(browser.textCursor().MoveOperation.End)
+            found = browser.find(text, QTextDocument.FindFlag.FindBackward)
+        self._find_match_lbl.setText("✓" if found else "No match")
+
+    def _close_find_bar(self):
+        """Hide the find bar and return focus to the report browser."""
+        self._find_bar.setVisible(False)
+        self._find_edit.clear()
+        self._find_match_lbl.setText("")
+        browser = self._active_report_browser()
+        if browser:
+            browser.setFocus()
+
+    def _reports_show_placeholder(self, browser, message: str = "Generating…"):
+        """Show a dark-themed loading placeholder in a report browser."""
+        browser.setHtml(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body {{ margin:0; background:{DARK_BG}; display:flex; align-items:center;
+         justify-content:center; height:100vh; font-family:sans-serif; }}
+  .msg {{ color:{TEXT_SEC}; font-size:14px; text-align:center; }}
+  .dot {{ display:inline-block; animation:blink 1.2s infinite; }}
+  .dot:nth-child(2) {{ animation-delay:.2s; }}
+  .dot:nth-child(3) {{ animation-delay:.4s; }}
+  @keyframes blink {{ 0%,80%,100%{{opacity:0}} 40%{{opacity:1}} }}
+</style></head><body>
+<div class="msg">{message}
+  <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+</div></body></html>""")
 
     def _reports_switch(self):
         self.tabs.setCurrentIndex(3)
@@ -9140,11 +9404,53 @@ class MainWindow(QMainWindow):
         finally:
             self._busy(False)
 
+    def _reports_pregenerate_sprint(self):
+        """Silently pre-generate the Sprint Report in the background.
+        Does not switch tabs, does not show the busy indicator.
+        Called automatically after stories load and on first visit to sub-tab 0."""
+        if not self._issues or not self._client or 0 in self._reports_generated:
+            return
+        sprint_id     = self.sprint_combo.currentData()
+        sprint_label  = self.sprint_lbl.text() or self.sprint_combo.currentText()
+        sprint_detail = {}
+        if sprint_id:
+            try:
+                sprint_detail = self._client.get_sprint_detail(sprint_id)
+            except Exception:
+                pass
+        try:
+            dlg = SprintReportDialog(
+                issues=self._issues, sprint_label=sprint_label,
+                sp_field=self._sp_field, fl_field=self.edit_panel._fl_field,
+                base_url=self.edit_panel._base_url,
+                adf_to_text_fn=self.edit_panel._adf_to_text,
+                client=self._client,
+                board_id=self.board_combo.currentData() or 0,
+                sprint_detail=sprint_detail, parent=self,
+            )
+            dlg._build_report(self._issues, sprint_label)
+            html = dlg._html
+            self._rpt_sprint_browser.setHtml(self._dark_html(html))
+            self._reports_html_map[0] = html
+            self._reports_generated.add(0)
+            # Update save button if Sprint Report sub-tab is currently visible
+            if self.tabs.currentIndex() == 3 and self._reports_tabs.currentIndex() == 0:
+                self._reports_html = html
+                self._rpt_save_btn.setEnabled(True)
+            # Also sync the sprint selector to match the loaded sprint
+            for i in range(self._srt_sprint_sel.count()):
+                if self._srt_sprint_sel.itemData(i) == sprint_id:
+                    self._srt_sprint_sel.setCurrentIndex(i)
+                    break
+        except Exception:
+            pass  # Silent failure — user can still click Generate manually
+
     def _reports_generate_sprint(self):
         if not self._client:
             return
         self.tabs.setCurrentIndex(3)
         self._reports_tabs.setCurrentIndex(0)
+        self._reports_show_placeholder(self._rpt_sprint_browser)
 
         # Determine scope from sub-tab controls
         use_sprint = self._srt_sprint_rb.isChecked()
@@ -9218,7 +9524,8 @@ class MainWindow(QMainWindow):
         dlg._build_report(issues, sprint_label)
         html = dlg._html
         self._rpt_sprint_browser.setHtml(self._dark_html(html))
-        self._reports_html_map[0] = html  # export uses original light HTML
+        self._reports_html_map[0] = html
+        self._reports_generated.add(0)
         self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
         self._status(f"✓ Sprint report — {len(issues)} stories.")
@@ -9228,6 +9535,7 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentIndex(3)
         self._reports_tabs.setCurrentIndex(1)
+        self._reports_show_placeholder(self._rpt_people_browser)
 
         # Scope
         use_sprint = self._prt_sprint_rb.isChecked()
@@ -9258,11 +9566,26 @@ class MainWindow(QMainWindow):
             if not from_date or not to_date:
                 QMessageBox.warning(self, "Date Range", "Please enter both From and To dates.")
                 return
-            sprint_label = f"{from_date} \u2192 {to_date}"
+            sprint_label = f"{from_date} → {to_date}"
             self._busy(True)
-            self._status("Loading issues for date range\u2026")
+            self._status("Loading issues for date range…")
             try:
-                issues = self._client.get_issues_by_date_range(
+                # Collect selected people display names first
+                selected_items  = self._prt_people_list.selectedItems()
+                display_names   = [item.text() for item in selected_items]
+                extra_names     = [n.strip() for n in self._prt_extra.text().split(",") if n.strip()]
+                all_display     = list(dict.fromkeys(display_names + extra_names))
+                # Resolve to Jira username/accountId for JQL
+                jql_ids = (
+                    self._client.resolve_assignee_ids(all_display, self._users_cache)
+                    if all_display and self._users_cache
+                    else all_display
+                )
+                issues = self._client.get_issues_for_people_report(
+                    assignees=jql_ids,
+                    date_from=from_date,
+                    date_to=to_date,
+                ) if jql_ids else self._client.get_issues_by_date_range(
                     self.project_combo.currentData(), from_date, to_date
                 )
             except Exception as e:
@@ -9276,7 +9599,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No Stories", "No stories found for the selected scope.")
             return
 
-        # Collect selected people
+        # Collect selected people (display names for the report grouping)
         selected_items = self._prt_people_list.selectedItems()
         assignees = [item.text() for item in selected_items]
         extra = [n.strip() for n in self._prt_extra.text().split(",") if n.strip()]
@@ -9301,7 +9624,8 @@ class MainWindow(QMainWindow):
         dlg._build_people_report(issues, assignees, sprint_label)
         html = dlg._people_html
         self._rpt_people_browser.setHtml(self._dark_html(html))
-        self._reports_html_map[1] = html  # export uses original light HTML
+        self._reports_html_map[1] = html
+        self._reports_generated.add(1)
         self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
         self._status(f"\u2713 People report \u2014 {len(assignees)} people.")
@@ -9467,6 +9791,7 @@ class MainWindow(QMainWindow):
 <th>Stories</th><th>Done</th><th>Completion</th></tr>{rows}</table>
 </body></html>"""
             self._reports_html_map[2] = html
+            self._reports_generated.add(2)
             self._reports_html = html
             self._rpt_save_btn.setEnabled(True)
             self._status(f"✓ Velocity — {len(data)} sprints.")
@@ -9548,6 +9873,7 @@ a {{ color: {ACCENT_CYAN} !important; }}
             return
         self.tabs.setCurrentIndex(3)
         self._reports_tabs.setCurrentIndex(4)
+        self._reports_show_placeholder(self._rpt_burndown_browser, "Building burndown chart")
 
         sprint_id    = self.sprint_combo.currentData()
         sprint_label = self.sprint_lbl.text() or self.sprint_combo.currentText()
@@ -9588,7 +9914,8 @@ a {{ color: {ACCENT_CYAN} !important; }}
             board_id=self.board_combo.currentData() or 0,
             sprint_detail=sprint_detail, parent=self,
         )
-        svg = dlg._build_burndown_svg(total_pts, done_pts, len(self._issues), n_done)
+        svg = dlg._build_burndown_svg(total_pts, done_pts, len(self._issues), n_done,
+                                       for_export=False)
 
         # Build a minimal HTML wrapper styled to match the app
         start_str = (sprint_detail.get("startDate") or "")[:10]
@@ -9645,15 +9972,41 @@ a {{ color: {ACCENT_CYAN} !important; }}
 </body></html>"""
 
         self._rpt_burndown_browser.setHtml(self._dark_html(html))
-        self._reports_html_map[4] = html  # export uses original light HTML
+        self._reports_html_map[4] = html
+        self._reports_generated.add(4)
         self._reports_html = html
         self._rpt_save_btn.setEnabled(True)
         self._status(f"✓ Burndown — {total_pts} pts total, {done_pts} done ({pct_done}%).")
 
     def _reports_save_html(self):
-        html = self._reports_html_map.get(self._reports_tabs.currentIndex(), "")
+        idx  = self._reports_tabs.currentIndex()
+        html = self._reports_html_map.get(idx, "")
         if not html:
             return
+        # For sprint report and burndown, regenerate with full SVG for export
+        if idx == 0 and self._issues and self._client:
+            sprint_id     = self._srt_sprint_sel.currentData() or self.sprint_combo.currentData()
+            sprint_label  = self._srt_sprint_sel.currentText() or self.sprint_combo.currentText()
+            sprint_detail = {}
+            if sprint_id:
+                try:
+                    sprint_detail = self._client.get_sprint_detail(sprint_id)
+                except Exception:
+                    pass
+            dlg = SprintReportDialog(
+                issues=self._issues, sprint_label=sprint_label,
+                sp_field=self._sp_field, fl_field=self.edit_panel._fl_field,
+                base_url=self.edit_panel._base_url,
+                adf_to_text_fn=self.edit_panel._adf_to_text,
+                client=self._client, board_id=self.board_combo.currentData() or 0,
+                sprint_detail=sprint_detail, parent=self,
+            )
+            dlg._build_report(self._issues, sprint_label, for_export=True)
+            html = dlg._html
+        elif idx == 4 and self._issues and self._client:
+            # Regenerate burndown with full SVG
+            html = self._build_burndown_export_html()
+
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Report", "sprintmate-report.html", "HTML Files (*.html)"
         )
@@ -9664,6 +10017,82 @@ a {{ color: {ACCENT_CYAN} !important; }}
                 self._status(f"✓ Report saved to {path}")
             except Exception as e:
                 QMessageBox.critical(self, "Save Failed", str(e))
+
+    def _build_burndown_export_html(self) -> str:
+        """Re-render the burndown chart with full SVG for HTML export."""
+        if not self._issues or not self._client:
+            return self._reports_html_map.get(4, "")
+        sprint_id     = self.sprint_combo.currentData()
+        sprint_label  = self.sprint_lbl.text() or self.sprint_combo.currentText()
+        sprint_detail = {}
+        if sprint_id:
+            try:
+                sprint_detail = self._client.get_sprint_detail(sprint_id)
+            except Exception:
+                pass
+        sp        = self._sp_field
+        total_pts = done_pts = n_done = 0
+        for iss in self._issues:
+            f      = iss.get("fields", {})
+            status = (f.get("status") or {}).get("name", "")
+            pts_raw = next(
+                (f.get(k) for k in ([sp] + JiraClient._SP_FALLBACKS)
+                 if f.get(k) is not None), None
+            )
+            try:
+                pts = int(float(pts_raw)) if pts_raw is not None else 0
+            except (TypeError, ValueError):
+                pts = 0
+            total_pts += pts
+            if status == "Done":
+                done_pts += pts
+                n_done   += 1
+        dlg = SprintReportDialog(
+            issues=self._issues, sprint_label=sprint_label,
+            sp_field=sp, fl_field=self.edit_panel._fl_field,
+            base_url=self.edit_panel._base_url,
+            adf_to_text_fn=self.edit_panel._adf_to_text,
+            client=self._client, board_id=self.board_combo.currentData() or 0,
+            sprint_detail=sprint_detail, parent=self,
+        )
+        svg = dlg._build_burndown_svg(total_pts, done_pts, len(self._issues), n_done,
+                                       for_export=True)
+        pct_done = round(done_pts / total_pts * 100) if total_pts else 0
+        start_str = (sprint_detail.get("startDate") or "")[:10]
+        end_str   = (sprint_detail.get("endDate")   or "")[:10]
+        date_range = f"{start_str} → {end_str}" if start_str and end_str else ""
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         background:#f6f8fa; padding:28px 24px; color:#1f2328; margin:0; }}
+  h1   {{ font-size:20px; font-weight:700; margin:0 0 4px; }}
+  .meta {{ color:#57606a; font-size:12px; margin-bottom:20px; }}
+  .card {{ background:#fff; border:1px solid #d0d7de; border-radius:10px;
+           padding:20px 24px; box-shadow:0 1px 3px rgba(0,0,0,.04); }}
+  .stats {{ display:flex; gap:32px; margin-top:16px; padding-top:14px;
+            border-top:1px solid #f0f0f0; font-size:12px; }}
+  .stat-lbl {{ color:#57606a; margin-bottom:2px; }}
+  .stat-val {{ font-size:20px; font-weight:700; color:#1f2328; }}
+  .stat-val.green {{ color:#3fb950; }} .stat-val.blue {{ color:#388bfd; }}
+  @media print {{ body {{ background:#fff; }} .card {{ box-shadow:none; }} }}
+</style></head><body>
+<h1>📉 Burndown Chart</h1>
+<div class="meta">{sprint_label}{' &nbsp;·&nbsp; ' + date_range if date_range else ''}</div>
+<div class="card">
+  {svg}
+  <div class="stats">
+    <div><div class="stat-lbl">Total Points</div>
+         <div class="stat-val blue">{total_pts}</div></div>
+    <div><div class="stat-lbl">Points Done</div>
+         <div class="stat-val green">{done_pts}</div></div>
+    <div><div class="stat-lbl">Remaining</div>
+         <div class="stat-val">{total_pts - done_pts}</div></div>
+    <div><div class="stat-lbl">Completion</div>
+         <div class="stat-val {'green' if pct_done >= 80 else 'blue'}">{pct_done}%</div></div>
+    <div><div class="stat-lbl">Stories Done</div>
+         <div class="stat-val">{n_done} / {len(self._issues)}</div></div>
+  </div>
+</div></body></html>"""
 
     # ── Archive ───────────────────────────────────────────────────────────────
     def _open_archive(self):
