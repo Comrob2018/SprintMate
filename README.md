@@ -1,4 +1,4 @@
-# SprintMate  ◈  v2.27.0
+# SprintMate  ◈  v2.27.1
 
 A Python desktop app for managing your team's Jira Data Center sprint stories — update assignees, story points, priorities, descriptions, post comments, edit and delete comments, transition statuses, attach files, archive stories, clone stories to any project or instance, import bulk comments, bulk-create or bulk-edit stories, export sprint data, generate professional sprint and people reports with burndown charts, view your sprint as a Kanban board with drag-and-drop, browse and groom the project backlog, track velocity history across sprints, and create, start, rename, and close sprints — all from one panel.
 
@@ -387,7 +387,7 @@ Click **☰ Backlog** in the top bar (or press `Alt+3`) to switch to the Backlog
 
 A load bar at the top of the tab contains PROJECT and BOARD dropdowns and a **↺ Load Backlog** button. The dropdowns are pre-filled to match whatever is selected on the Stories tab. Select a project and board, then click **↺ Load Backlog** to fetch all open issues that have no sprint assigned. The load bar works the same way as the Active Sprint board's load toolbar — you can load a backlog without visiting the Stories tab first.
 
-Results display in a sortable, filterable table with columns for KEY, SUMMARY, ASSIGNEE, PRIORITY, PTS, TYPE, and DUE DATE. Use the filter box at the top to search live across all columns.
+Results display in a sortable, filterable table with columns for KEY, SUMMARY, ASSIGNEE, PRIORITY, PTS, TYPE, and DUE DATE. Use the filter box at the top to search live across all columns. Epics and sub-tasks are excluded — the backlog only shows stories, bugs, tasks, and other sprint work items.
 
 **Right-clicking any row** opens a context menu. Menu items adapt for single vs multi-selection:
 
