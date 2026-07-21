@@ -378,10 +378,7 @@ QTabBar::tab:hover:!selected {{
     color: {TEXT_PRI};
 }}
 """
-def _add_escape_shortcut(dialog):
-    """Add Escape key to close/reject a QDialog."""
-    from PyQt6.QtGui import QKeySequence, QShortcut
-    QShortcut(QKeySequence("Escape"), dialog).activated.connect(dialog.reject)
+
 
 # ── Jira API client ───────────────────────────────────────────────────────────
 class JiraClient:
@@ -2020,6 +2017,18 @@ class StoryEditPanel(QFrame):
         self.desc_edit.textChanged.connect(self._check_dirty)
         self.comment_edit.textChanged.connect(self._check_dirty)
 
+        # ── Logical tab order ─────────────────────────────────────────────────
+        self.setTabOrder(self.assignee_combo,   self.issuetype_combo)
+        self.setTabOrder(self.issuetype_combo,  self.priority_combo)
+        self.setTabOrder(self.priority_combo,   self.points_combo)
+        self.setTabOrder(self.points_combo,     self.sprint_combo)
+        self.setTabOrder(self.sprint_combo,     self.due_date)
+        self.setTabOrder(self.due_date,         self.transition_combo)
+        self.setTabOrder(self.transition_combo, self.feature_link_edit)
+        self.setTabOrder(self.feature_link_edit, self.desc_edit)
+        self.setTabOrder(self.desc_edit,        self.comment_edit)
+        self.setTabOrder(self.comment_edit,     self.save_btn)
+
     def _apply_comment_template(self, index: int):
         text = self.comment_template_combo.itemData(index)
         if not text: return
@@ -2514,6 +2523,13 @@ class ExportStoriesDialog(QDialog):
 
 
 # ── Sprint Report Dialog ──────────────────────────────────────────────────────
+def _add_escape_shortcut(dialog):
+    """Add Escape key to close/reject a QDialog."""
+    from PyQt6.QtWidgets import QShortcut
+    from PyQt6.QtGui import QKeySequence
+    QShortcut(QKeySequence("Escape"), dialog).activated.connect(dialog.reject)
+
+
 def _apply_dark_palette(browser, bg: str = None, base: str = None):
     """Force a QTextBrowser to use dark colours for its document background.
     setStyleSheet alone does not override the Base palette role that
@@ -2537,7 +2553,6 @@ class SprintReportDialog(QDialog):
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle("Sprint Report")
-        _add_escape_shortcut(self)
         self.setMinimumSize(960, 720)
         self.setStyleSheet(parent.styleSheet() if parent else "")
 
@@ -4690,7 +4705,7 @@ class KanbanBoardWidget(QWidget):
         self._priority_combo = QComboBox()
         self._priority_combo.setMinimumWidth(110)
         self._priority_combo.addItem("All", None)
-        for p in ["Critical", "Major", "Normal", "Minor", "Trivial"]:
+        for p in ["Highest", "High", "Medium", "Low", "Lowest"]:
             self._priority_combo.addItem(p, p)
         self._priority_combo.currentIndexChanged.connect(self._apply_filters)
         fb.addWidget(self._priority_combo)
@@ -4902,7 +4917,7 @@ class BacklogWidget(QWidget):
     story_selected   = pyqtSignal(str)
     move_to_sprint   = pyqtSignal(str, int)   # (issue_key, sprint_id)
     load_requested   = pyqtSignal()            # ask MainWindow to load backlog
-    project_changed  = pyqtSignal(object)     # emitted when user picks a different project
+    project_changed  = pyqtSignal(object)      # emitted when user picks a different project
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -5052,7 +5067,6 @@ class BacklogWidget(QWidget):
 
         self._bl_project_combo.blockSignals(False)
         self._bl_board_combo.blockSignals(False)
-
     def set_base_url(self, url: str):
         self._base_url = url
 
@@ -5254,6 +5268,7 @@ class ToastNotification(QFrame):
             "warn":    "#E3B341",
             "info":    ACCENT_BLUE,
         }.get(kind, ACCENT_BLUE)
+
         self.setStyleSheet(f"""
             QFrame {{
                 background: {bg};
@@ -5272,6 +5287,7 @@ class ToastNotification(QFrame):
         msg_lbl.setWordWrap(False)
         layout.addWidget(msg_lbl)
         self.adjustSize()
+
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
@@ -5286,6 +5302,7 @@ class ToastNotification(QFrame):
         self.move(x, y)
         self.raise_()
         self.show()
+
 
 # ── Main window ───────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
@@ -5310,6 +5327,8 @@ class MainWindow(QMainWindow):
         self._unsaved_row: int | None = None       # row with pending edits
         self._reports_html_map: dict[int, str] = {}  # reports sub-tab index -> html
         self._reports_generated: set[int] = set()    # sub-tabs already generated
+        self._last_sprint_per_board: dict[str, int] = {}  # board_id -> last sprint_id
+        self._last_quick_add_key: str = ""
 
         self._build_ui()
         self._settings = self._load_settings()
@@ -5602,6 +5621,22 @@ class MainWindow(QMainWindow):
             "KEY", "SUMMARY", "ASSIGNEE", "STATUS", "DUE DATE",
             "PTS", "PRIORITY", "TYPE", "FEATURE LINK"
         ])
+        # Column header tooltips for abbreviated columns
+        _col_tips = [
+            "Issue key (e.g. PROJ-123)",
+            "Story title / summary",
+            "Assigned team member",
+            "Current workflow status — double-click to transition",
+            "Due date — double-click to edit",
+            "Story points (Fibonacci) — double-click to edit",
+            "Priority level",
+            "Issue type (Story, Bug, Task…)",
+            "Feature link URL or ID",
+        ]
+        for col, tip in enumerate(_col_tips):
+            item = self.table.horizontalHeaderItem(col)
+            if item:
+                item.setToolTip(tip)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(COL_KEY,         QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(COL_SUMMARY,     QHeaderView.ResizeMode.Stretch)
@@ -6090,36 +6125,6 @@ class MainWindow(QMainWindow):
 
         self._setup_shortcuts()
 
-    def _on_backlog_project_changed(self, project_data):
-        """User changed the project in the backlog load bar — load boards for it."""
-        if not self._client or not project_data:
-            return
-        project_key = project_data if isinstance(project_data, str) else str(project_data)
-        self._status(f"Loading boards for {project_key}…")
-        self._busy(True)
-
-        def _do():
-            return self._client.get_boards(project_key)
-
-        def _on_done(boards):
-            self._busy(False)
-            bl = self.backlog_widget
-            bl._bl_board_combo.blockSignals(True)
-            bl._bl_board_combo.clear()
-            for b in boards:
-                bl._bl_board_combo.addItem(b.get("name", str(b["id"])), b["id"])
-            bl._bl_board_combo.setEnabled(len(boards) > 0)
-            bl._bl_load_btn.setEnabled(len(boards) > 0)
-            bl._bl_board_combo.blockSignals(False)
-            self._status(f"✓ {len(boards)} boards loaded for {project_key}.")
-
-        self._spawn(_do,
-            on_result=_on_done,
-            on_error=lambda e: (
-                self._busy(False),
-                self._status(f"✗ Failed to load boards: {e}"),
-            ))
-        
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(
             lambda: self.edit_panel.save_btn.click() if self.edit_panel.save_btn.isEnabled() else None
@@ -6143,6 +6148,10 @@ class MainWindow(QMainWindow):
             lambda: (self.search_edit.setFocus(),
                      self.search_edit.selectAll())
         )
+        # Ctrl+K — command palette
+        QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(
+            self._show_command_palette
+        )
         # Ctrl+F — context-aware find
         QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(
             self._ctrl_f
@@ -6158,10 +6167,6 @@ class MainWindow(QMainWindow):
         )
         QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(
             self._copy_row_markdown
-        )
-
-        QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(
-            self._show_command_palette
         )
 
         # ? — shortcut reference card
@@ -6282,7 +6287,6 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Edit Story Points — {key}")
-        _add_escape_shortcut(self)
         dlg.setFixedSize(280, 140)
         dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
@@ -6309,9 +6313,11 @@ class MainWindow(QMainWindow):
         )
         btns.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
         btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setDefault(True)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
+        _add_escape_shortcut(dlg)
 
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
@@ -6358,7 +6364,6 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Reassign — {key}")
-        _add_escape_shortcut(self)
         dlg.setFixedSize(320, 150)
         dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
@@ -6383,9 +6388,11 @@ class MainWindow(QMainWindow):
         )
         btns.button(QDialogButtonBox.StandardButton.Ok).setText("Reassign")
         btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setDefault(True)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
+        _add_escape_shortcut(dlg)
 
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
@@ -6432,7 +6439,6 @@ class MainWindow(QMainWindow):
                 return
             dlg = QDialog(self)
             dlg.setWindowTitle(f"Change Status — {key}")
-            _add_escape_shortcut(self)
             dlg.setFixedSize(300, 140)
             dlg.setStyleSheet(self.styleSheet())
             layout = QVBoxLayout(dlg)
@@ -6489,7 +6495,6 @@ class MainWindow(QMainWindow):
         current = (f.get("duedate") or "")[:10]
         dlg     = QDialog(self)
         dlg.setWindowTitle(f"Set Due Date — {key}")
-        _add_escape_shortcut(self)
         dlg.setFixedSize(300, 160)
         dlg.setStyleSheet(self.styleSheet())
         layout  = QVBoxLayout(dlg)
@@ -6520,9 +6525,11 @@ class MainWindow(QMainWindow):
         )
         btns.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
         btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setDefault(True)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
+        _add_escape_shortcut(dlg)
 
         cleared = [False]
         clear_btn.clicked.connect(lambda: (cleared.__setitem__(0, True), dlg.accept()))
@@ -6784,6 +6791,36 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(2)
         self.backlog_widget.sync_combos(self.project_combo, self.board_combo)
 
+    def _on_backlog_project_changed(self, project_data):
+        """User changed the project in the backlog load bar — load boards for it."""
+        if not self._client or not project_data:
+            return
+        project_key = project_data if isinstance(project_data, str) else str(project_data)
+        self._status(f"Loading boards for {project_key}…")
+        self._busy(True)
+
+        def _do():
+            return self._client.get_boards(project_key)
+
+        def _on_done(boards):
+            self._busy(False)
+            bl = self.backlog_widget
+            bl._bl_board_combo.blockSignals(True)
+            bl._bl_board_combo.clear()
+            for b in boards:
+                bl._bl_board_combo.addItem(b.get("name", str(b["id"])), b["id"])
+            bl._bl_board_combo.setEnabled(len(boards) > 0)
+            bl._bl_load_btn.setEnabled(len(boards) > 0)
+            bl._bl_board_combo.blockSignals(False)
+            self._status(f"✓ {len(boards)} boards loaded for {project_key}.")
+
+        self._spawn(_do,
+            on_result=_on_done,
+            on_error=lambda e: (
+                self._busy(False),
+                self._status(f"✗ Failed to load boards: {e}"),
+            ))
+
     def _on_backlog_load_requested(self):
         """User clicked Load Backlog from within BacklogWidget — sync selections and load."""
         kb = self.backlog_widget
@@ -6808,7 +6845,12 @@ class MainWindow(QMainWindow):
 
     # ── Backlog helpers ───────────────────────────────────────────────────────
     def _load_backlog(self, board_id=None, project_key=None):
-        """Fetch issues not in any sprint for the current project."""
+        """Fetch issues not in any sprint for the current project.
+
+        Tries `sprint is EMPTY` first (standard DC). Falls back to
+        `sprint not in openSprints() AND sprint not in closedSprints()` if the
+        first form is rejected (some older instances don't support it).
+        """
         project_key = project_key or self.project_combo.currentData()
         if not project_key or not self._client:
             return
@@ -6842,6 +6884,7 @@ class MainWindow(QMainWindow):
 
         def _do():
             # Exclude Epics and Sub-tasks — neither belongs in a sprint backlog view.
+            # Three JQL attempts in order of broadest DC compatibility:
             type_filter = 'issuetype not in (Epic, Sub-task)'
             base = (
                 f'project = "{project_key}" '
@@ -6865,7 +6908,8 @@ class MainWindow(QMainWindow):
             except Exception as e2:
                 pass
 
-            # Attempt 3: sprint not in openSprints() only
+            # Attempt 3: sprint not in openSprints() only (older DC instances
+            # may not support closedSprints() in this context)
             try:
                 return _fetch(
                     f"{base} AND sprint not in openSprints() {order}"
@@ -7179,6 +7223,7 @@ class MainWindow(QMainWindow):
 
         self.table.setRowCount(0)
         self.story_count_lbl.setText("No stories loaded")
+        self.tabs.setTabText(0, "◈  STORIES")
         self.velocity_lbl.setText("")
         self.sprint_lbl.setText("")
         self._issues = []
@@ -7270,6 +7315,9 @@ class MainWindow(QMainWindow):
         }
         qs.setValue("column_prefs", json.dumps(col_prefs_serialisable))
 
+        # Persist last sprint per board
+        qs.setValue("last_sprint_per_board", json.dumps(self._last_sprint_per_board))
+
     def _load_settings(self) -> dict:
         qs = QSettings("SprintMate", "SprintMate")
 
@@ -7285,6 +7333,12 @@ class MainWindow(QMainWindow):
             self._column_prefs = {bid: set(cols) for bid, cols in raw.items()}
         except (json.JSONDecodeError, TypeError):
             self._column_prefs = {}
+
+        # Restore last sprint per board
+        try:
+            self._last_sprint_per_board = json.loads(qs.value("last_sprint_per_board", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            self._last_sprint_per_board = {}
 
         return {
             "mode":                       qs.value("mode", JiraClient.MODE_SECONDARY),
@@ -7663,11 +7717,12 @@ class MainWindow(QMainWindow):
         self._prt_gen_btn.setEnabled(True)
         bid = self.board_combo.currentData()
         if bid:
-            last_sid = QSettings("SprintMate","SprintMate").value(f"last_sprint_{bid}")
+            last_sid = self._last_sprint_per_board.get(str(bid))
             if last_sid:
                 for i in range(self.sprint_combo.count()):
-                    if str(self.sprint_combo.itemData(i)) == str(last_sid):
-                        self.sprint_combo.setCurrentIndex(i); break
+                    if self.sprint_combo.itemData(i) == last_sid:
+                        self.sprint_combo.setCurrentIndex(i)
+                        break
         self.edit_panel.set_sprints(sprints)
         self.backlog_widget.set_sprints(sprints)
         # Keep Kanban toolbar in sync
@@ -7717,6 +7772,12 @@ class MainWindow(QMainWindow):
         self._populate_table(issues)
         self._status(f"Loaded {len(issues)} stories.")
         self.story_count_lbl.setText(f"{len(issues)} stories")
+        self.tabs.setTabText(0, f"◈  STORIES ({len(issues)})")
+        # Remember which sprint was loaded for this board
+        board_id = str(self.board_combo.currentData() or "")
+        sprint_id = self.sprint_combo.currentData()
+        if board_id and sprint_id:
+            self._last_sprint_per_board[board_id] = sprint_id
         self._update_velocity_bar()
         self._populate_assignee_filter()
         self._populate_assignee_filter()
@@ -7911,7 +7972,6 @@ class MainWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Bulk Edit — {len(keys)} stories")
-        _add_escape_shortcut(self)
         dlg.setMinimumWidth(380)
         dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
@@ -7964,9 +8024,11 @@ class MainWindow(QMainWindow):
         )
         btns.button(QDialogButtonBox.StandardButton.Ok).setText("Apply to All")
         btns.button(QDialogButtonBox.StandardButton.Ok).setObjectName("save_btn")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setDefault(True)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
+        _add_escape_shortcut(dlg)
 
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
@@ -8026,7 +8088,6 @@ class MainWindow(QMainWindow):
         """Show the keyboard shortcut reference card."""
         dlg = QDialog(self)
         dlg.setWindowTitle("Keyboard Shortcuts")
-        _add_escape_shortcut(self)
         dlg.setMinimumWidth(500)
         dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
@@ -8045,7 +8106,8 @@ class MainWindow(QMainWindow):
                 ("Ctrl+I",       "Import Comments"),
                 ("Ctrl+E",       "Export Stories"),
                 ("/",            "Focus Stories filter box"),
-                ("Ctrl+F",       "Find in current view (filter box on Stories/Kanban/Backlog; find bar on Reports)"),
+                ("Ctrl+F",       "Find in current view (filter/find bar)"),
+                ("Ctrl+K",       "Command palette — fuzzy search all actions"),
                 ("Ctrl+C",       "Copy selected row (comma-separated)"),
                 ("Ctrl+Shift+C", "Copy full issue as CSV row"),
                 ("Ctrl+Shift+M", "Copy row as Markdown"),
@@ -8257,13 +8319,16 @@ class MainWindow(QMainWindow):
 
             assignee = f.get("assignee")
             aname = assignee.get("displayName", "Unassigned") if assignee else "—"
-            a_item = QTableWidgetItem(aname)
+            initials = "".join(w[0].upper() for w in aname.split()[:2]) if aname != "—" else "—"
+            a_item = QTableWidgetItem(f"  {initials}  {aname}")
             a_item.setForeground(QColor(TEXT_SEC))
+            a_item.setToolTip(aname)
             self.table.setItem(row, COL_ASSIGNEE, a_item)
 
             status = f.get("status", {}).get("name", "")
-            s_item = QTableWidgetItem(status)
+            s_item = QTableWidgetItem(f"  {status}  ")
             s_item.setForeground(QColor(STATUS_COLORS.get(status, TEXT_SEC)))
+            s_item.setBackground(QColor(STATUS_COLORS.get(status, TEXT_SEC) + "22"))
             s_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, COL_STATUS, s_item)
 
@@ -8490,7 +8555,6 @@ class MainWindow(QMainWindow):
             return
         msg = QMessageBox(self)
         msg.setWindowTitle("Export Stories")
-        _add_escape_shortcut(self)
         msg.setText(f"Export all {len(self._issues)} stories, or select specific ones?")
         btn_all    = msg.addButton("All",    QMessageBox.ButtonRole.YesRole)
         btn_select = msg.addButton("Select", QMessageBox.ButtonRole.NoRole)
@@ -9337,13 +9401,14 @@ class MainWindow(QMainWindow):
         key = result.get("key", "") if isinstance(result, dict) else ""
         if key:
             self._status(f"✓ Created {key}.")
-            self._last_quick_add_key = key
+            self._last_quick_add_key = key   # store for undo
             self._load_sprint_issues(reselect_key=key)
+            # Show toast with Undo action
             self._show_quick_add_undo_toast(key)
         else:
             errors = result.get("errorMessages", []) if isinstance(result, dict) else []
             QMessageBox.critical(self, "Quick Add Failed", "\n".join(errors) or "Unknown error.")
-    
+
     def _show_quick_add_undo_toast(self, key: str):
         """Show a brief toast with an Undo button to archive the just-created story."""
         toast = QFrame(self)
@@ -9383,6 +9448,8 @@ class MainWindow(QMainWindow):
         undo_btn.clicked.connect(_do_undo)
         tl.addWidget(undo_btn)
         toast.adjustSize()
+
+        # Position bottom-right
         pr = self.rect()
         toast.resize(toast.sizeHint())
         toast.move(pr.right() - toast.width() - 16, pr.bottom() - toast.height() - 48)
@@ -10389,7 +10456,6 @@ a {{ color: {ACCENT_CYAN} !important; }}
         # Build a picker dialog
         dlg = QDialog(self)
         dlg.setWindowTitle("Archive Stories")
-        _add_escape_shortcut(self)
         dlg.setMinimumSize(640, 480)
         dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
@@ -10574,7 +10640,6 @@ a {{ color: {ACCENT_CYAN} !important; }}
         else:
             dlg = QDialog(self)
             dlg.setWindowTitle(f"Edit Comment — {key}")
-            _add_escape_shortcut(self)
             dlg.setMinimumSize(560, 360)
             dlg.setStyleSheet(self.styleSheet())
             layout = QVBoxLayout(dlg)
@@ -10614,7 +10679,6 @@ a {{ color: {ACCENT_CYAN} !important; }}
         # Edit dialog
         edit_dlg = QDialog(self)
         edit_dlg.setWindowTitle(f"Edit Comment — {key}")
-        _add_escape_shortcut(self)
         edit_dlg.setMinimumSize(520, 280)
         edit_dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(edit_dlg)
@@ -10669,7 +10733,6 @@ a {{ color: {ACCENT_CYAN} !important; }}
         else:
             dlg = QDialog(self)
             dlg.setWindowTitle(f"Delete Comment — {key}")
-            _add_escape_shortcut(self)
             dlg.setMinimumSize(560, 360)
             dlg.setStyleSheet(self.styleSheet())
             layout = QVBoxLayout(dlg)
@@ -10760,7 +10823,6 @@ a {{ color: {ACCENT_CYAN} !important; }}
         # ── Dialog ────────────────────────────────────────────────────────────
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Clone {src_key}")
-        _add_escape_shortcut(self)
         dlg.setMinimumSize(560, 520)
         dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
@@ -10917,7 +10979,6 @@ a {{ color: {ACCENT_CYAN} !important; }}
 
             msg = QMessageBox(self)
             msg.setWindowTitle("Clone Successful")
-            _add_escape_shortcut(self)
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setText(
                 f"✓ <b>{src_key}</b> cloned successfully.\n\n"
