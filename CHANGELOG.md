@@ -1,4 +1,12 @@
 # SprintMate Changelog
+## [2.27.1] — 2026-06-25
+### Bug Fixes
+* **Backlog project/board selection fixed.** Changing the project in the backlog load bar now triggers a board reload. A `project_changed` signal was added to `BacklogWidget` and wired to a new `_on_backlog_project_changed` handler in `MainWindow` that calls `get_boards(project_key)` in a background thread and populates the board combo with the results. `sync_combos` continues to block signals so mirroring from the Stories tab doesn't trigger the project-change flow. `_on_backlog_load_requested` now syncs by data value rather than index, and passes board ID and project key directly to `_load_backlog` to avoid routing through the Stories combos.
+* **Backlog no longer shows Epics or Sub-tasks.** `issuetype not in (Epic, Sub-task)` added to the base JQL. Epics are not sprint work items and sub-tasks belong to their parent stories — neither should appear in the backlog view.
+* **Backlog JQL compatibility improved.** The previous two-attempt fallback has been expanded to three attempts with clearer error reporting: (1) `sprint is EMPTY` — most concise, works on DC 8+; (2) `sprint not in openSprints() AND not in closedSprints()` — broader compatibility; (3) `sprint not in openSprints()` only — for older DC instances that don't support `closedSprints()` in this context. If all three fail, the error dialog now shows all three failure reasons to help diagnose which JQL variant the instance requires.
+
+---
+
 ## [2.27.0] — 2026-06-25
 ### Features
 * **Escape to close all dialogs.** A module-level `_add_escape_shortcut(dialog)` helper was added and wired into all 7 `QDialog` subclasses (`NewStoryDialog`, `BulkCreateDialog`, `ImportCommentsDialog`, `SettingsDialog`, `ExportStoriesDialog`, `SprintManagerDialog`, `VelocityHistoryDialog`) as well as all inline edit dialogs (story points, assignee, due date) and the bulk edit dialog.
@@ -14,7 +22,7 @@
 * **Undo for quick-add.** After creating a story via the quick-add bar, a 5-second toast with an **Undo** button appears in the bottom-right corner. Clicking it archives the just-created story via `archive_issue` and reloads the sprint. The created key is stored in `_last_quick_add_key`.
 
 ---
- 
+
 ## [2.26.2] — 2026-06-24
 ### Bug Fixes & Improvements
 * **Context-aware `Ctrl+F`.** `Ctrl+F` now does the right thing depending on which tab is active rather than conflicting with the OS/browser "find in page" expectation. On the Stories tab it focuses and selects the Stories filter box. On the Active Sprint board it focuses the Kanban filter box. On the Backlog tab it focuses the Backlog search box. On the Reports tab it opens an inline find bar at the bottom of the tab.
@@ -23,7 +31,7 @@
 * **`Ctrl+F` for filter removed and replaced.** The previous `Ctrl+F` binding that focused the Stories filter box has been removed. It conflicted with the universal find-in-page expectation and was replaced with `/` (Stories filter) and the new context-aware `Ctrl+F` described above.
 
 ---
- 
+
 ## [2.26.1] — 2026-06-24
 ### Bug Fixes & Improvements
 * **Reports tab auto-generation (Option D).** The Reports tab no longer requires manually clicking ▶ Generate before content appears. Three complementary mechanisms now handle this:
@@ -38,19 +46,19 @@
 * **People report key mismatch fixed.** `_build_people_report` was keying `by_assignee` on `name`/`accountId` but the assignees list contained `displayName` values, causing all issues to be skipped. The matching now tries `displayName` first, then falls back to `name`/`accountId` for compatibility.
 
 ---
- 
+
 ## [2.26.0] — 2026-06-24
 ### Features
 * **Backlog project and board selectors.** The Backlog tab now has the same load bar as the Active Sprint board — a PROJECT dropdown, a BOARD dropdown, and a **↺ Load Backlog** button sit at the top of the tab. The dropdowns are pre-filled from whatever the Stories tab has selected and sync automatically whenever boards finish loading, issues finish loading, or the user switches to the Backlog tab. The old external Load Backlog button in the MainWindow toolbar has been removed — the button now lives inside the widget. Clicking **↺ Load Backlog** syncs the selected project and board back to the Stories tab combos and triggers the same `_load_backlog()` path as before. A new `_switch_to_backlog()` method replaces the bare `lambda: self.tabs.setCurrentIndex(2)` used previously, ensuring combos are always in sync when the tab is opened via the toolbar button or `Alt+3`.
 
 ---
- 
+
 ## [2.25.3] — 2026-06-23
 ### Bug Fixes
 * **QTextBrowser white box fixed with QPalette.** The dark CSS override injected by `_dark_html()` was not enough — `QTextBrowser` uses `QPalette.ColorRole.Base` to paint its document canvas, which `setStyleSheet` cannot override. A new module-level `_apply_dark_palette()` function explicitly sets `Base`, `Window`, `Text`, and `AlternateBase` colour roles to the app's dark theme constants and calls `setAutoFillBackground(True)`. It is called on all six report browsers: `_browser` and `_people_browser` in `SprintReportDialog`, and all four sub-tab browsers (`_rpt_sprint_browser`, `_rpt_people_browser`, `_rpt_compare_browser`, `_rpt_burndown_browser`) in the Reports tab. Defined as a module-level function so both `SprintReportDialog` and `MainWindow` can call it without inheritance.
 
 ---
- 
+
 ## [2.25.2] — 2026-06-23
 ### Bug Fixes
 * **Reports tab dark theme.** All five report sub-tabs now match the velocity tab's dark appearance. A new `_dark_html()` helper injects a `<style>` block overriding `body`, card surfaces, table headers, rows, and link colours to the app's dark theme constants before loading HTML into any `QTextBrowser`. All `!important` overrides ensure the injected styles beat the report's own CSS. The Compare and Burndown sub-tab containers are now wrapped in dark `QWidget` backgrounds with `border: none` on the browser, matching the velocity tab layout exactly.
@@ -65,7 +73,7 @@
 * **Report browser and HTML backgrounds fixed.** `SprintReportDialog._browser` and `._people_browser` had hardcoded `background: #ffffff` CSS — corrected to use `DARK_BG` with a proper `QTextBrowser { }` selector. All HTML report `body` backgrounds changed from `#f6f8fa` / `#ffffff` to `transparent` so the dark widget background shows through cleanly. `@media print` blocks retain `background: #fff` for correct print output.
 
 ---
- 
+
 ## [2.25.0] — 2026-06-23
 ### Features
 * **Reports tab restructured with five sub-tabs.** The single `QTextBrowser` that previously swapped content on each button click has been replaced with a `QTabWidget` inside the Reports tab. Each sub-tab persists its content independently — switching between them does not lose a generated report. The five sub-tabs are:
@@ -82,7 +90,7 @@
 
 ## [2.24.0] — 2026-06-23
 ### Features
-* **Configure moved to Help menu.** The **⚙ Configure** button has been removed from the top bar. Configure is now the first item in the **Help** menu alongside Keyboard Shortcuts, Check for Updates, and About SprintMate. The top bar is now: Switch Instance · Stories · Active Sprint · Backlog · Reports · Refresh.
+* **Configure moved to Help menu.** The **⚙ Configure** button has been removed from the top bar. Configure is now the first item in the **Menu** item alongside Keyboard Shortcuts, Check for Updates, and About SprintMate. The top bar is now: Switch Instance · Stories · Active Sprint · Backlog · Reports · Refresh.
 * **Reports tab.** A new **📊 Reports** tab (fourth tab, `Alt+4`, top-bar **📊 Reports** button) replaces the Sprint Report, Velocity, and Compare controls that were scattered across the Stories toolbar. The tab contains:
   * A **SPRINT** dropdown pre-populated with all sprints on the board, with the active sprint pre-selected.
   * **📊 Sprint Report** — generates the full dashboard-style HTML report inline in a `QTextBrowser` inside the tab. No separate dialog window.
@@ -91,7 +99,7 @@
   * **⇆ Compare** dropdown and button — moved from the Stories toolbar row 1.
   * **⬇ Save HTML** button (right-aligned) — enabled after any report is generated, saves the current report to a file.
   * Reports render directly into the tab browser; `SprintReportDialog` is reused internally for its `_build_report` and `_build_people_report` methods without showing the dialog.
-* **? help button removed from toolbar.** The keyboard shortcut reference is now accessible via **Help → Keyboard Shortcuts…** or the `?` key. The button is no longer needed in the toolbar.
+* **? help button removed from toolbar.** The keyboard shortcut reference is now accessible via **Menu → Keyboard Shortcuts…** or the `?` key. The button is no longer needed in the toolbar.
 * **Stories toolbar decluttered.** Row 2 now contains: New Story, Bulk Create, Import, Export, Archive, Bulk Edit, Assignee filter, and search box. Sprint Report, Velocity, and ? have been removed; Compare has moved to the Reports tab.
 
 ---
@@ -116,7 +124,7 @@
   * The toolbar auto-hides once `populate()` is called with stories, and reappears when `clear()` is called (board change, instance switch, sprint clear).
 
 ---
- 
+
 ## [2.22.0] — 2026-06-23
 ### Features
 * **Sprint progress bar.** A 4px coloured bar sits below the story count row, always visible when a sprint is loaded. It fills green (≥80% of points done), amber (40–79%), or red (<40%). Hovering shows "X of Y pts done (Z%) · N of M stories done". Hides and resets to zero on sprint clear.
@@ -140,14 +148,22 @@
 ## [2.21.0] — 2026-06-23
 ### Features
 * **Professional sprint report redesign.** `_build_report` and `_build_burndown_svg` were fully rewritten. The report is now a dashboard-style HTML document rendered on a light grey background with white card surfaces, subtle box shadows, and a consistent font stack (`-apple-system`, `Segoe UI`, `Helvetica`, `Arial`).
-* **Report header** — a dark gradient panel (`#1c2128 → #2d333b`) contains the report title, sprint name as a subtitle, and a meta row with the sprint date range (when available), generation date, and a story/points count.
-* **Stat cards** — five white cards in a flex row, each with a coloured left-border accent, an emoji icon, a large metric, a label, and a contextual sub-line (e.g. "12 remaining"). The velocity card replaces the number with an inline SVG circular progress ring with the percentage overlaid in the centre.
-* **Section headings** — small all-caps labels with a horizontal rule extending to the right edge, providing clear visual separation between report sections.
-* **Burndown chart** — rebuilt with a proper background grid (vertical day lines and horizontal point lines), a green-tinted ideal-region shading, a blue-tinted actual-region shading, a thicker actual line with a rounded dot at the current position, and an ahead/behind callout label (`▲ N pts ahead` / `▼ N pts behind` / `On track`) positioned above the day marker. The callout anchor shifts left or right at chart edges to prevent clipping.
-* **Status breakdown** — replaced the plain count table with a proportional horizontal stacked bar (one segment per status, coloured to match the app's status colour map) and a flex legend row below showing a colour swatch, name, count, and percentage. Zero-count statuses are omitted.
-* **Team section** — replaced the assignee table with a responsive CSS grid of per-person cards. Each card shows an avatar circle with initials, name and story/points count, two inline progress bars (stories complete and points complete with percentages), and a footer row showing done / pts done / remaining as coloured numbers.
-* **Story table** — sticky column headers, full-row hover highlight, pill-shaped status badges (coloured background matching status), directional priority symbols with colour coding (▲▲ Highest red → ▼▼ Lowest grey), and overdue rows highlighted with a full red-tinted row background (previously only the due date cell was coloured).
-* **Print/export CSS** — a `@media print` block ensures the dark header prints correctly (`-webkit-print-color-adjust: exact`), removes box shadows, prevents cards from breaking across pages, and un-sticks table headers for pagination.
+
+  **Report header** — a dark gradient panel (`#1c2128 → #2d333b`) contains the report title, sprint name as a subtitle, and a meta row with the sprint date range (when available), generation date, and a story/points count.
+
+  **Stat cards** — five white cards in a flex row, each with a coloured left-border accent, an emoji icon, a large metric, a label, and a contextual sub-line (e.g. "12 remaining"). The velocity card replaces the number with an inline SVG circular progress ring with the percentage overlaid in the centre.
+
+  **Section headings** — small all-caps labels with a horizontal rule extending to the right edge, providing clear visual separation between report sections.
+
+  **Burndown chart** — rebuilt with a proper background grid (vertical day lines and horizontal point lines), a green-tinted ideal-region shading, a blue-tinted actual-region shading, a thicker actual line with a rounded dot at the current position, and an ahead/behind callout label (`▲ N pts ahead` / `▼ N pts behind` / `On track`) positioned above the day marker. The callout anchor shifts left or right at chart edges to prevent clipping.
+
+  **Status breakdown** — replaced the plain count table with a proportional horizontal stacked bar (one segment per status, coloured to match the app's status colour map) and a flex legend row below showing a colour swatch, name, count, and percentage. Zero-count statuses are omitted.
+
+  **Team section** — replaced the assignee table with a responsive CSS grid of per-person cards. Each card shows an avatar circle with initials, name and story/points count, two inline progress bars (stories complete and points complete with percentages), and a footer row showing done / pts done / remaining as coloured numbers.
+
+  **Story table** — sticky column headers, full-row hover highlight, pill-shaped status badges (coloured background matching status), directional priority symbols with colour coding (▲▲ Highest red → ▼▼ Lowest grey), and overdue rows highlighted with a full red-tinted row background (previously only the due date cell was coloured).
+
+  **Print/export CSS** — a `@media print` block ensures the dark header prints correctly (`-webkit-print-color-adjust: exact`), removes box shadows, prevents cards from breaking across pages, and un-sticks table headers for pagination.
 
 ---
 
@@ -166,7 +182,7 @@
   * **⇧ Move to Sprint / Move N Stories to Sprint** — moves the selected stories to whichever sprint is chosen in the Move to Sprint dropdown. Disabled if no sprint is selected. This duplicates the toolbar Move button for convenience when right-clicking.
 
 ---
- 
+
 ## [2.19.0] — 2026-06-22
 ### Features
 * **Sprint management — create, start, rename, and close sprints.** A new **⊕ Sprint** button appears in the filter toolbar once a board is loaded. Clicking it opens the Sprint Manager dialog, which has two tabs.
@@ -177,7 +193,7 @@
 * **`JiraClient.update_sprint`** — calls `POST /rest/agile/1.0/sprint/{id}` and automatically falls back to `PUT` on HTTP 405 (some older DC instances require PUT). Accepts any combination of name, state, startDate, endDate, goal, and completeDate. Passing `state="active"` starts the sprint; `state="closed"` closes it.
 
 ---
- 
+
 ## [2.18.0] — 2026-06-22
 ### Features
 * **Kanban board persists between tab switches.** `KanbanBoardWidget.populate()` now skips a full re-render when the issues list identity and sp_field are unchanged. Switching away from Kanban and back no longer rebuilds all cards. A `refresh(force=True)` call is used after drag-and-drop transitions to force an update only when the data has actually changed.
@@ -280,7 +296,7 @@
 
 ## [2.13.1] — 2026-05-19
 ### Features
-* **Check for Updates via Help menu.** A native Help menu has been added to the menu bar containing `“Check for Updates…”` and `“About SprintMate”`. The update check fetches the raw script from the URL defined in `GITHUB_RAW_URL`, reads it line-by-line until it finds the APP_VERSION assignment, and compares it against the running version — without loading the full file into memory. The fetch runs in a background thread via the existing _spawn mechanism so the UI never blocks. If a newer version is found, a dialog prompts the user to open the repository page in their browser; the repo URL is derived automatically from `GITHUB_RAW_URL` by replacing raw.githubusercontent.com with github.com.
+* **Check for Updates via Help menu.** A native **Menu** menu bar entry has been added to the menu bar containing `“Check for Updates…”` and `“About SprintMate”`. The update check fetches the raw script from the URL defined in `GITHUB_RAW_URL`, reads it line-by-line until it finds the APP_VERSION assignment, and compares it against the running version — without loading the full file into memory. The fetch runs in a background thread via the existing _spawn mechanism so the UI never blocks. If a newer version is found, a dialog prompts the user to open the repository page in their browser; the repo URL is derived automatically from `GITHUB_RAW_URL` by replacing raw.githubusercontent.com with github.com.
 * **Two-row filter bar.** The single filter bar row has been split into two. Row 1 contains the board/sprint selection controls (PROJECT, BOARD, SPRINT, Load Stories, COMPARE). Row 2 contains the action buttons (＋ New Story, ＋＋ Bulk Create, 📄 Import, ⬇ Export) on the left and the ASSIGNEE filter and text search on the right. Both rows share the same horizontal padding. The fb_layout QHBoxLayout has been replaced with a QVBoxLayout (fb_outer) containing two QHBoxLayout children (fb_row1, fb_row2).
 ### Improvements
 * **`GITHUB_RAW_URL` module-level constant.** The remote URL used for update checks is defined as a single constant near `APP_VERSION`, making it straightforward to update when the repository is moved or renamed without searching through method bodies.
