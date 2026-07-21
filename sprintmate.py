@@ -8319,8 +8319,7 @@ class MainWindow(QMainWindow):
 
             assignee = f.get("assignee")
             aname = assignee.get("displayName", "Unassigned") if assignee else "—"
-            initials = "".join(w[0].upper() for w in aname.split()[:2]) if aname != "—" else "—"
-            a_item = QTableWidgetItem(f"  {initials}  {aname}")
+            a_item = QTableWidgetItem(aname)
             a_item.setForeground(QColor(TEXT_SEC))
             a_item.setToolTip(aname)
             self.table.setItem(row, COL_ASSIGNEE, a_item)
